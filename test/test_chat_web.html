@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qwen API 测试界面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            max-width: 800px;
+            width: 100%;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+
+        .config-section {
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .input-group input, .input-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+
+        .message.user {
+            background: #007bff;
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant {
+            background: white;
+            color: #333;
+            border: 1px solid #e9ecef;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.system {
+            background: #6c757d;
+            color: white;
+            margin: 0 auto;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .message.error {
+            background: #dc3545;
+            color: white;
+            margin: 0 auto;
+        }
+
+        .input-area {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .message-input {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .message-input textarea {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 12px;
+            resize: none;
+            font-size: 14px;
+            font-family: inherit;
+            min-height: 50px;
+            max-height: 120px;
+        }
+
+        .send-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 12px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            min-width: 80px;
+            transition: background 0.2s;
+        }
+
+        .send-btn:hover:not(:disabled) {
+            background: #0056b3;
+        }
+
+        .send-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .examples {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .example-btn {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 20px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .example-btn:hover {
+            background: #e9ecef;
+            border-color: #adb5bd;
+        }
+
+        .status {
+            text-align: center;
+            padding: 10px;
+            font-size: 14px;
+            color: #6c757d;
+        }
+
+        .loading {
+            color: #007bff;
+        }
+
+        .error {
+            color: #dc3545;
+        }
+
+        .success {
+            color: #28a745;
+        }
+
+        .clear-btn {
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
+        .clear-btn:hover {
+            background: #5a6268;
+        }
+
+        .toggle-config {
+            background: #17a2b8;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 12px;
+            float: right;
+        }
+
+        .toggle-config:hover {
+            background: #138496;
+        }
+
+        .config-section.collapsed {
+            display: none;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                max-height: 100vh;
+                border-radius: 0;
+            }
+            
+            .examples {
+                justify-content: center;
+            }
+            
+            .message {
+                max-width: 90%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Qwen API 测试界面</h1>
+            <p>测试你的 Qwen API 聊天接口</p>
+            <button class="toggle-config" onclick="toggleConfig()">配置设置</button>
+        </div>
+
+        <div class="config-section" id="configSection">
+            <div class="input-group">
+                <label for="apiUrl">API地址:</label>
+                <input type="text" id="apiUrl" value="http://localhost:5000/v1/chat/completions" placeholder="http://localhost:5000/v1/chat/completions">
+            </div>
+            <div class="input-group">
+                <label for="apiKey">API Key:</label>
+                <input type="password" id="apiKey" placeholder="输入你的API Key">
+            </div>
+            <div class="input-group">
+                <label for="model">模型:</label>
+                <select id="model">
+                    <option value="qwen-plus">qwen-plus</option>
+                    <option value="qwen-turbo">qwen-turbo</option>
+                    <option value="qwen-max">qwen-max</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <div class="input-group" style="flex: 1;">
+                    <label for="temperature">Temperature:</label>
+                    <input type="number" id="temperature" value="0.7" min="0" max="2" step="0.1">
+                </div>
+                <div class="input-group" style="flex: 1;">
+                    <label for="maxTokens">Max Tokens:</label>
+                    <input type="number" id="maxTokens" value="1000" min="1" max="4000">
+                </div>
+            </div>
+            <div class="input-group" style="margin-bottom: 0;">
+                <label><input type="checkbox" id="streamMode" checked style="width:auto;vertical-align:middle;"> 启用流式输出</label>
+            </div>
+        </div>
+
+        <div class="chat-container">
+            <div class="messages" id="messages">
+                <div class="message system">
+                    欢迎使用 Qwen API 测试界面！请先在上方配置你的API设置，然后开始对话。
+                </div>
+            </div>
+
+            <div class="input-area">
+                <div class="examples">
+                    <button class="example-btn" onclick="setMessage('你是谁？')">你是谁？</button>
+                    <button class="example-btn" onclick="setMessage('请写一个Python函数')">写Python函数</button>
+                    <button class="example-btn" onclick="setMessage('解释一下机器学习')">解释机器学习</button>
+                    <button class="example-btn" onclick="setMessage('今天天气怎么样？')">询问天气</button>
+                    <button class="clear-btn" onclick="clearMessages()">清空对话</button>
+                </div>
+                
+                <div class="message-input">
+                    <textarea id="messageInput" placeholder="输入你的消息..." onkeydown="handleKeyDown(event)"></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
+                </div>
+                
+                <div class="status" id="status">就绪</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let messages = [];
+        let isLoading = false;
+
+        function toggleConfig() {
+            const configSection = document.getElementById('configSection');
+            configSection.classList.toggle('collapsed');
+        }
+
+        function setMessage(text) {
+            document.getElementById('messageInput').value = text;
+            document.getElementById('messageInput').focus();
+        }
+
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function addMessage(role, content, isError = false) {
+            const messagesContainer = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}${isError ? ' error' : ''}`;
+            messageDiv.textContent = content;
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function setStatus(text, type = '') {
+            const status = document.getElementById('status');
+            status.textContent = text;
+            status.className = `status ${type}`;
+        }
+
+        function clearMessages() {
+            const messagesContainer = document.getElementById('messages');
+            messagesContainer.innerHTML = '<div class="message system">对话已清空，可以开始新的对话了。</div>';
+            messages = [];
+            setStatus('就绪');
+        }
+
+        async function sendMessage() {
+            if (isLoading) return;
+
+            const messageInput = document.getElementById('messageInput');
+            const userMessage = messageInput.value.trim();
+            
+            if (!userMessage) {
+                setStatus('请输入消息', 'error');
+                return;
+            }
+
+            const apiUrl = document.getElementById('apiUrl').value;
+            const apiKey = document.getElementById('apiKey').value;
+            const model = document.getElementById('model').value;
+            const temperature = parseFloat(document.getElementById('temperature').value);
+            const maxTokens = parseInt(document.getElementById('maxTokens').value);
+            const streamMode = document.getElementById('streamMode').checked;
+
+            if (!apiKey) {
+                setStatus('请设置API Key', 'error');
+                return;
+            }
+
+            // 添加用户消息到界面
+            addMessage('user', userMessage);
+            messages.push({ role: 'user', content: userMessage });
+            
+            messageInput.value = '';
+            isLoading = true;
+            document.getElementById('sendBtn').disabled = true;
+            setStatus('正在发送请求...', 'loading');
+
+            try {
+                const requestData = {
+                    model: model,
+                    messages: [
+                        { role: 'system', content: 'You are a helpful assistant.' },
+                        ...messages
+                    ],
+                    temperature: temperature,
+                    max_tokens: maxTokens
+                };
+                if (streamMode) requestData.stream = true;
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                setStatus('处理响应中...', 'loading');
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+
+                if (streamMode) {
+                    // 流式处理
+                    await handleStreamResponse(response);
+                } else {
+                    // 非流式处理
+                    const result = await response.json();
+                    if (result.choices && result.choices.length > 0) {
+                        const assistantMessage = result.choices[0].message.content;
+                        addMessage('assistant', assistantMessage);
+                        messages.push({ role: 'assistant', content: assistantMessage });
+                        if (result.usage) {
+                            const usage = result.usage;
+                            setStatus(`✅ 成功 | Tokens: ${usage.total_tokens} (输入: ${usage.prompt_tokens}, 输出: ${usage.completion_tokens})`, 'success');
+                        } else {
+                            setStatus('✅ 发送成功', 'success');
+                        }
+                    } else {
+                        throw new Error('响应格式不正确：缺少choices字段');
+                    }
+                }
+            } catch (error) {
+                console.error('请求失败:', error);
+                addMessage('system', `❌ 错误: ${error.message}`, true);
+                setStatus(`❌ 请求失败: ${error.message}`, 'error');
+            } finally {
+                isLoading = false;
+                document.getElementById('sendBtn').disabled = false;
+                messageInput.focus();
+            }
+        }
+
+        // 流式响应处理
+        async function handleStreamResponse(response) {
+            const messagesContainer = document.getElementById('messages');
+            // 创建assistant消息div
+            const assistantDiv = document.createElement('div');
+            assistantDiv.className = 'message assistant';
+            messagesContainer.appendChild(assistantDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            let fullContent = '';
+            let usage = null;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let { value, done } = await reader.read();
+            let buffer = '';
+            while (!done) {
+                buffer += decoder.decode(value, { stream: true });
+                let lines = buffer.split(/\r?\n/);
+                buffer = lines.pop(); // 最后一行可能是不完整的
+                for (let line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const chunk = JSON.parse(line);
+                        if (chunk.choices && chunk.choices.length > 0 && chunk.choices[0].delta && 'content' in chunk.choices[0].delta) {
+                            const content = chunk.choices[0].delta.content;
+                            if (content) {
+                                fullContent += content;
+                                assistantDiv.textContent = fullContent;
+                                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                            }
+                        }
+                        if (chunk.usage) usage = chunk.usage;
+                    } catch (e) {
+                        // 不是JSON，忽略
+                    }
+                }
+                ({ value, done } = await reader.read());
+            }
+            // 处理最后一段buffer
+            if (buffer.trim()) {
+                try {
+                    const chunk = JSON.parse(buffer);
+                    if (chunk.choices && chunk.choices.length > 0 && chunk.choices[0].delta && 'content' in chunk.choices[0].delta) {
+                        const content = chunk.choices[0].delta.content;
+                        if (content) {
+                            fullContent += content;
+                            assistantDiv.textContent = fullContent;
+                        }
+                    }
+                    if (chunk.usage) usage = chunk.usage;
+                } catch (e) {}
+            }
+            messages.push({ role: 'assistant', content: fullContent });
+            if (usage) {
+                setStatus(`✅ 成功 | Tokens: ${usage.total_tokens} (输入: ${usage.prompt_tokens}, 输出: ${usage.completion_tokens})`, 'success');
+            } else {
+                setStatus('✅ 发送成功', 'success');
+            }
+        }
+
+        // 页面加载完成后的初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 尝试从localStorage恢复配置
+            const savedApiKey = localStorage.getItem('qwen_api_key');
+            const savedApiUrl = localStorage.getItem('qwen_api_url');
+            
+            if (savedApiKey) {
+                document.getElementById('apiKey').value = savedApiKey;
+            }
+            if (savedApiUrl) {
+                document.getElementById('apiUrl').value = savedApiUrl;
+            }
+
+            // 保存配置到localStorage
+            document.getElementById('apiKey').addEventListener('change', function() {
+                localStorage.setItem('qwen_api_key', this.value);
+            });
+            
+            document.getElementById('apiUrl').addEventListener('change', function() {
+                localStorage.setItem('qwen_api_url', this.value);
+            });
+
+            // 自动聚焦到输入框
+            document.getElementById('messageInput').focus();
+        });
+
+        // 测试健康检查接口
+        async function testHealth() {
+            const apiUrl = document.getElementById('apiUrl').value.replace('/v1/chat/completions', '/health');
+            
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Origin': window.location.origin
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    addMessage('system', `✅ 服务健康检查通过 - 状态: ${result.status}, 时间: ${result.timestamp}`);
+                    setStatus('✅ 服务运行正常', 'success');
+                } else {
+                    addMessage('system', `❌ 健康检查失败: ${response.status}`, true);
+                    setStatus('❌ 服务异常', 'error');
+                }
+            } catch (error) {
+                let errorMessage = error.message;
+                if (error.message.includes('CORS') || error.message.includes('cross-origin')) {
+                    errorMessage = `跨域访问被阻止 - 请确保服务器已配置CORS: ${error.message}`;
+                } else if (error.message.includes('Failed to fetch')) {
+                    errorMessage = `无法连接到服务器 - 请检查服务是否运行在 ${apiUrl}`;
+                }
+                addMessage('system', `❌ 连接失败: ${errorMessage}`, true);
+                setStatus('❌ 连接失败', 'error');
+            }
+        }
+
+        // 测试CORS配置
+        async function testCORS() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            setStatus('正在测试CORS配置...', 'loading');
+
+            try {
+                // 先测试预检请求
+                const preflightResponse = await fetch(apiUrl, {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Origin': window.location.origin,
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'Content-Type, Authorization'
+                    }
+                });
+
+                if (preflightResponse.ok) {
+                    addMessage('system', '✅ CORS预检请求成功 - 跨域访问已正确配置');
+                    
+                    // 检查CORS头
+                    const corsHeaders = [];
+                    preflightResponse.headers.forEach((value, key) => {
+                        if (key.toLowerCase().startsWith('access-control')) {
+                            corsHeaders.push(`${key}: ${value}`);
+                        }
+                    });
+                    
+                    if (corsHeaders.length > 0) {
+                        addMessage('system', `CORS头信息: ${corsHeaders.join(', ')}`);
+                    }
+                    
+                    setStatus('✅ CORS配置正常', 'success');
+                } else {
+                    addMessage('system', '❌ CORS预检请求失败 - 可能存在跨域问题', true);
+                    setStatus('❌ CORS配置异常', 'error');
+                }
+            } catch (error) {
+                addMessage('system', `❌ CORS测试失败: ${error.message}`, true);
+                setStatus('❌ CORS测试失败', 'error');
+            }
+        }
+
+        // 添加健康检查和CORS测试按钮
+        document.addEventListener('DOMContentLoaded', function() {
+            const examples = document.querySelector('.examples');
+            
+            // 健康检查按钮
+            const healthBtn = document.createElement('button');
+            healthBtn.className = 'example-btn';
+            healthBtn.textContent = '健康检查';
+            healthBtn.onclick = testHealth;
+            examples.appendChild(healthBtn);
+            
+            // CORS测试按钮
+            const corsBtn = document.createElement('button');
+            corsBtn.className = 'example-btn';
+            corsBtn.textContent = 'CORS测试';
+            corsBtn.onclick = testCORS;
+            examples.appendChild(corsBtn);
+        });
+    </script>
+</body>
+</html> 
