@@ -1,14 +1,28 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit, disconnect
 import requests
 import json
 import logging
 from datetime import datetime
 import time
+import base64
+import os
 from database import init_database, save_chat_record, get_chat_history
-from config import QWEN_API_KEY, QWEN_API_CHAT_URL, QWEN_CHAT_MODEL
+from config import (QWEN_API_KEY, QWEN_API_CHAT_URL, QWEN_CHAT_MODEL, 
+                    REAL_TIME_AUDIO_URL, TTS_VOICE, TTS_SAMPLE_RATE, TTS_OUTPUT_DIR,
+                    DEFAULT_SYSTEM_PROMPT, MAX_CONVERSATION_HISTORY)
+from up_to_oss import upload_audio_file, upload_and_cleanup
+from audio_transcription import transcribe_audio_from_url
+from chat_service import generate_chat_response_stream
+from tts_realtime_client import synthesize_text_to_audio
+import asyncio
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key-here'  # 生产环境中应使用环境变量
+
+# 初始化SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
 
 # 配置CORS，允许跨域访问
 CORS(app, resources={
@@ -30,10 +44,527 @@ logger = logging.getLogger(__name__)
 # 初始化数据库
 init_database()
 
+# 创建音频文件存储目录
+AUDIO_STORAGE_DIR = 'audio_files'
+if not os.path.exists(AUDIO_STORAGE_DIR):
+    os.makedirs(AUDIO_STORAGE_DIR)
+
+# 创建TTS输出目录
+if not os.path.exists(TTS_OUTPUT_DIR):
+    os.makedirs(TTS_OUTPUT_DIR)
+
+# 存储音频数据包的字典，按session_id组织
+audio_sessions = {}
+
+# 简化配置 - 不需要全局对象
+
 # 检查配置
 logger.info(f"QWEN_API_KEY: {'已设置' if QWEN_API_KEY else '未设置'}")
 logger.info(f"QWEN_API_CHAT_URL: {QWEN_API_CHAT_URL}")
 logger.info(f"QWEN_CHAT_MODEL: {QWEN_CHAT_MODEL}")
+
+# WebSocket事件处理
+@socketio.on('connect', namespace='/v1/chat/audio')
+def handle_audio_connect():
+    """处理音频WebSocket连接"""
+    session_id = request.sid
+    logger.info(f"音频WebSocket连接建立: {session_id}")
+    
+    # 初始化音频会话
+    audio_sessions[session_id] = {
+        'packets': {},
+        'total_packets': 0,
+        'received_count': 0,
+        'start_time': datetime.now()
+    }
+    
+    emit('connected', {'message': '音频连接已建立', 'session_id': session_id})
+
+@socketio.on('disconnect', namespace='/v1/chat/audio')
+def handle_audio_disconnect():
+    """处理音频WebSocket断开"""
+    session_id = request.sid
+    logger.info(f"音频WebSocket连接断开: {session_id}")
+    
+    # 清理会话数据
+    if session_id in audio_sessions:
+        del audio_sessions[session_id]
+
+@socketio.on('message', namespace='/v1/chat/audio')
+def handle_audio_message(message):
+    """处理音频消息 - 接收纯JSON数据"""
+    session_id = request.sid
+    
+    try:
+        # 如果收到的是字符串，尝试解析为JSON
+        if isinstance(message, str):
+            try:
+                data = json.loads(message)
+            except json.JSONDecodeError as e:
+                emit('error', {'message': f'JSON解析错误: {str(e)}'})
+                return
+        else:
+            data = message
+        
+        # 验证数据格式
+        if not isinstance(data, dict):
+            emit('error', {'message': '数据格式错误，必须是JSON对象'})
+            return
+        
+        required_fields = ['seq', 'total', 'data']
+        for field in required_fields:
+            if field not in data:
+                emit('error', {'message': f'缺少必要字段: {field}'})
+                return
+        
+        seq = data['seq']
+        total = data['total']
+        audio_data = data['data']
+        
+        # 验证数据类型
+        if not isinstance(seq, int) or not isinstance(total, int) or not isinstance(audio_data, str):
+            emit('error', {'message': '数据类型错误'})
+            return
+        
+        # 验证序号范围
+        if seq < 1 or seq > total:
+            emit('error', {'message': f'序号超出范围: {seq}'})
+            return
+        
+        # 验证数据包大小（base64编码后的大小）
+        if len(audio_data) > 11000:  # 考虑base64编码增加约1/3大小，8KB*4/3≈11KB
+            emit('error', {'message': '数据包超过8KB限制'})
+            return
+        
+        # 验证base64格式
+        try:
+            base64.b64decode(audio_data)
+        except Exception as e:
+            emit('error', {'message': f'无效的base64数据: {str(e)}'})
+            return
+        
+        logger.info(f"收到音频数据包 {seq}/{total}, 会话ID: {session_id}")
+        
+        # 获取或初始化会话
+        if session_id not in audio_sessions:
+            audio_sessions[session_id] = {
+                'packets': {},
+                'total_packets': 0,
+                'received_count': 0,
+                'start_time': datetime.now()
+            }
+        
+        session = audio_sessions[session_id]
+        
+        # 设置总包数（第一次接收时）
+        if session['total_packets'] == 0:
+            session['total_packets'] = total
+        elif session['total_packets'] != total:
+            emit('error', {'message': f'总包数不一致: 期望{session["total_packets"]}, 收到{total}'})
+            return
+        
+        # 检查是否重复接收
+        if seq in session['packets']:
+            emit('error', {'message': f'重复的数据包序号: {seq}'})
+            return
+        
+        # 存储数据包
+        session['packets'][seq] = audio_data
+        session['received_count'] += 1
+        
+        # 发送确认
+        emit('packet_ack', {
+            'seq': seq,
+            'received': session['received_count'],
+            'total': session['total_packets']
+        })
+        
+        # 检查是否接收完成
+        if session['received_count'] == session['total_packets']:
+            logger.info(f"音频数据包接收完成，会话ID: {session_id}")
+            process_complete_audio(session_id)
+
+            
+    
+    except Exception as e:
+        logger.error(f"处理音频数据包时出错: {e}")
+        emit('error', {'message': f'处理数据包时出错: {str(e)}'})
+
+def process_complete_audio(session_id):
+    """处理完整的音频数据"""
+    try:
+        session = audio_sessions[session_id]
+        
+        # 按序号重组音频数据
+        complete_audio_data = b""
+        for seq in range(1, session['total_packets'] + 1):
+            if seq not in session['packets']:
+                socketio.emit('error', {'message': f'缺少数据包: {seq}'}, 
+                            namespace='/v1/chat/audio', room=session_id)
+                return
+            
+            # 解码base64数据
+            packet_data = base64.b64decode(session['packets'][seq])
+            complete_audio_data += packet_data
+        
+        # 生成文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"audio_{session_id}_{timestamp}.mp3"
+        filepath = os.path.join(AUDIO_STORAGE_DIR, filename)
+        
+        # 保存MP3文件
+        with open(filepath, 'wb') as f:
+            f.write(complete_audio_data)
+        
+        file_size = len(complete_audio_data)
+        duration = (datetime.now() - session['start_time']).total_seconds()
+        
+        logger.info(f"音频文件已保存: {filepath}, 大小: {file_size} bytes, 用时: {duration:.2f}s")
+        
+        # 上传到OSS
+        oss_result = None
+        try:
+            logger.info(f"开始上传音频文件到OSS: {filepath}")
+            oss_result = upload_and_cleanup(filepath, keep_local=True)  # 先保留本地文件
+            
+            if oss_result and oss_result['success']:
+                logger.info(f"音频文件OSS上传成功: {oss_result['file_url']}")
+            else:
+                logger.error("音频文件OSS上传失败")
+        except Exception as e:
+            logger.error(f"OSS上传过程中出错: {str(e)}")
+        
+        # 语音识别
+        transcription_result = None
+        if oss_result and oss_result['success']:
+            try:
+                logger.info("开始语音识别...")
+                # 通知客户端开始语音识别
+                socketio.emit('transcription_started', {
+                    'message': '开始语音识别...',
+                    'oss_url': oss_result['file_url']
+                }, namespace='/v1/chat/audio', room=session_id)
+                
+                transcription_result = transcribe_audio_from_url(oss_result['file_url'])
+                
+                if transcription_result['success']:
+                    logger.info(f"语音识别成功: {transcription_result['text']}")
+                else:
+                    logger.error(f"语音识别失败: {transcription_result.get('error', '未知错误')}")
+                    
+            except Exception as e:
+                logger.error(f"语音识别过程中出错: {str(e)}")
+                transcription_result = {
+                    'success': False,
+                    'error': f'语音识别出错: {str(e)}',
+                    'text': ''
+                }
+        
+        # 对话生成和TTS合成 - 简化版本
+        chat_result = None
+        
+        if transcription_result and transcription_result['success'] and transcription_result['text'].strip():
+            try:
+                user_message = transcription_result['text'].strip()
+                logger.info(f"开始对话生成，用户消息: {user_message}")
+                
+                # 通知客户端开始对话生成
+                socketio.emit('chat_started', {
+                    'message': '开始生成AI回答...',
+                    'user_message': user_message
+                }, namespace='/v1/chat/audio', room=session_id)
+                
+                # 实时流式对话和TTS合成
+                def process_streaming_chat_and_tts():
+                    """处理流式对话并实时TTS合成"""
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        
+                        async def streaming_chat_with_tts():
+                            assistant_response = ""
+                            text_buffer = ""  # 用于积累文本
+                            
+                            # 标点符号，用于判断句子结束
+                            sentence_endings = ['。', '！', '？', '.', '!', '?', '\n']
+                            
+                            print("流式输出内容为：")
+                            
+                            # 通知客户端开始TTS合成
+                            socketio.emit('tts_started', {
+                                'message': '开始语音合成...'
+                            }, namespace='/v1/chat/audio', room=session_id)
+                            
+                            # 创建单一TTS连接
+                            from tts_realtime_client import TTSRealtimeClient, SessionMode
+                            import base64
+                            
+                            # 用于跟踪TTS状态
+                            tts_finished = False
+                            audio_chunks_sent = 0
+                            
+                            def audio_callback(audio_bytes: bytes):
+                                nonlocal audio_chunks_sent
+                                audio_chunks_sent += 1
+                                # 发送音频数据给客户端 - 严格按照要求的格式
+                                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                                socketio.emit('audio_stream', {
+                                    'event': 'data',
+                                    'data': audio_base64
+                                }, namespace='/v1/chat/audio', room=session_id)
+                                logger.debug(f"发送音频块 {audio_chunks_sent}, 大小: {len(audio_bytes)} bytes")
+                            
+                            client = TTSRealtimeClient(
+                                base_url=REAL_TIME_AUDIO_URL,
+                                api_key=QWEN_API_KEY,
+                                voice=TTS_VOICE,
+                                mode=SessionMode.SERVER_COMMIT,
+                                audio_callback=audio_callback
+                            )
+                            
+                            # 建立TTS连接
+                            await client.connect()
+                            
+                            # 启动消息处理任务
+                            consumer_task = asyncio.create_task(client.handle_messages())
+                            
+                            # 流式获取对话响应并实时发送到TTS
+                            for chunk in generate_chat_response_stream(user_message, DEFAULT_SYSTEM_PROMPT):
+                                assistant_response += chunk
+                                text_buffer += chunk
+                                print(chunk, end="", flush=True)
+                                
+                                # 实时发送流式响应给客户端
+                                socketio.emit('chat_chunk', {
+                                    'chunk': chunk,
+                                    'full_response': assistant_response
+                                }, namespace='/v1/chat/audio', room=session_id)
+                                
+                                # 检查是否需要进行TTS合成
+                                should_synthesize = False
+                                
+                                # 方法1: 遇到句子结束标点
+                                if any(ending in chunk for ending in sentence_endings):
+                                    should_synthesize = True
+                                
+                                # 方法2: 文本缓冲区过长（避免句子太长不包含标点的情况）
+                                elif len(text_buffer.strip()) >= 50:  # 50个字符
+                                    should_synthesize = True
+                                
+                                # 如果需要合成且缓冲区有内容
+                                if should_synthesize and text_buffer.strip():
+                                    text_to_synthesize = text_buffer.strip()
+                                    logger.info(f"发送TTS合成片段: {text_to_synthesize[:50]}{'...' if len(text_to_synthesize) > 50 else ''}")
+                                    
+                                    # 直接发送到同一个TTS连接
+                                    await client.append_text(text_to_synthesize)
+                                    
+                                    # 短暂等待确保发送完成
+                                    await asyncio.sleep(0.1)
+                                    
+                                    # 清空缓冲区
+                                    text_buffer = ""
+                            
+                            print()  # 换行
+                            logger.info(f"对话生成完成，完整回答: {assistant_response}")
+                            
+                            # 处理剩余的文本缓冲区
+                            if text_buffer.strip():
+                                logger.info(f"发送最后的TTS合成片段: {text_buffer.strip()[:50]}{'...' if len(text_buffer.strip()) > 50 else ''}")
+                                await client.append_text(text_buffer.strip())
+                                await asyncio.sleep(0.1)
+                            
+                            # 结束TTS会话
+                            await client.finish_session()
+                            logger.info(f"TTS会话结束，已发送 {audio_chunks_sent} 个音频块")
+                            
+                            # 等待TTS真正完成 - 等待handle_messages处理完所有消息
+                            try:
+                                await asyncio.wait_for(consumer_task, timeout=10.0)
+                                logger.info("TTS消息处理完成")
+                            except asyncio.TimeoutError:
+                                logger.warning("TTS消息处理超时，强制结束")
+                                consumer_task.cancel()
+                            except Exception as e:
+                                logger.error(f"TTS消息处理出错: {e}")
+                                consumer_task.cancel()
+                            
+                            # 关闭TTS连接
+                            await client.close()
+                            
+                            # 发送完成信号 - 严格按照要求的格式
+                            socketio.emit('audio_stream', {
+                                'event': 'finished'
+                            }, namespace='/v1/chat/audio', room=session_id)
+                            
+                            logger.info(f"✅ 发送完成信号给客户端")
+                            logger.info(f"单一连接TTS合成完成，总共发送 {audio_chunks_sent} 个音频块")
+                            
+                            return {
+                                'success': True,
+                                'assistant_response': assistant_response,
+                                'tts_result': {
+                                    'success': True,
+                                    'method': 'single_connection'
+                                }
+                            }
+                        
+
+                        
+                        # 执行流式对话和TTS
+                        return loop.run_until_complete(streaming_chat_with_tts())
+                        
+                    except Exception as e:
+                        logger.error(f"流式对话和TTS处理出错: {str(e)}")
+                        return {
+                            'success': False,
+                            'error': str(e)
+                        }
+                    finally:
+                        loop.close()
+                
+                # 在线程池中执行
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(process_streaming_chat_and_tts)
+                    chat_result = future.result(timeout=120)  # 2分钟超时
+                
+                if chat_result and chat_result['success']:
+                    logger.info("流式对话和TTS合成完成")
+                    
+                    # 通知客户端完成
+                    tts_result = chat_result.get('tts_result', {})
+                    socketio.emit('chat_tts_complete', {
+                        'message': '实时对话生成和语音合成完成',
+                        'assistant_response': chat_result['assistant_response'],
+                        'tts_success': tts_result.get('success', False),
+                        'segments_count': tts_result.get('segments_count', 0),
+                        'total_segments': tts_result.get('total_segments', 0)
+                    }, namespace='/v1/chat/audio', room=session_id)
+                else:
+                    logger.error(f"流式对话和TTS处理失败: {chat_result.get('error', '未知错误') if chat_result else '未知错误'}")
+                    chat_result = {
+                        'success': False,
+                        'error': chat_result.get('error', '未知错误') if chat_result else '未知错误'
+                    }
+                    
+            except Exception as e:
+                logger.error(f"对话生成和TTS处理过程中出错: {str(e)}")
+                chat_result = {
+                    'success': False,
+                    'error': str(e)
+                }
+        else:
+            logger.info("跳过对话生成：语音识别失败或结果为空")
+        
+        # 构造响应数据
+        response_data = {
+            'message': '音频接收、上传和识别完成',
+            'filename': filename,
+            'filepath': filepath,
+            'size': file_size,
+            'packets': session['total_packets'],
+            'duration': duration
+        }
+        
+        # 添加OSS相关信息
+        if oss_result and oss_result['success']:
+            response_data.update({
+                'oss_uploaded': True,
+                'oss_url': oss_result['file_url'],
+                'oss_object_key': oss_result['object_key'],
+                'oss_etag': oss_result['etag']
+            })
+        else:
+            response_data['oss_uploaded'] = False
+        
+        # 添加语音识别结果
+        if transcription_result:
+            response_data.update({
+                'transcription_success': transcription_result['success'],
+                'transcription_text': transcription_result.get('text', ''),
+                'transcription_error': transcription_result.get('error', ''),
+                'transcription_task_id': transcription_result.get('task_id', '')
+            })
+            
+            if 'warning' in transcription_result:
+                response_data['transcription_warning'] = transcription_result['warning']
+        else:
+            response_data.update({
+                'transcription_success': False,
+                'transcription_text': '',
+                'transcription_error': 'OSS上传失败，无法进行语音识别'
+            })
+        
+        # 添加对话生成结果
+        if chat_result:
+            response_data.update({
+                'chat_success': chat_result['success'],
+                'assistant_response': chat_result.get('assistant_response', ''),
+                'chat_error': chat_result.get('error', ''),
+                'response_chunks_count': len(chat_result.get('response_chunks', []))
+            })
+            
+            # 添加TTS合成结果
+            if chat_result.get('tts_result'):
+                tts_data = chat_result['tts_result']
+                response_data.update({
+                    'tts_success': tts_data['success'],
+                    'tts_segments_count': tts_data.get('segments_count', 0),
+                    'tts_total_segments': tts_data.get('total_segments', 0),
+                    'tts_error': tts_data.get('error', '')
+                })
+            else:
+                response_data.update({
+                    'tts_success': False,
+                    'tts_error': '对话生成失败，无法进行TTS合成'
+                })
+        else:
+            response_data.update({
+                'chat_success': False,
+                'assistant_response': '',
+                'chat_error': '语音识别失败或结果为空，无法进行对话生成',
+                'tts_success': False,
+                'tts_error': '无法进行TTS合成'
+            })
+        
+        # 更新消息描述
+        if chat_result and chat_result['success']:
+            if chat_result.get('tts_result') and chat_result['tts_result']['success']:
+                response_data['message'] = '音频接收、识别、对话生成和实时语音合成全部完成'
+            else:
+                response_data['message'] = '音频接收、识别和对话生成完成，实时语音合成失败'
+        else:
+            response_data['message'] = '音频接收、上传和识别完成，对话生成失败'
+        
+        # 清理本地文件（仅在OSS上传成功时）
+        if oss_result and oss_result['success']:
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    logger.info(f"已删除本地缓存文件: {filepath}")
+                    response_data['local_file_cleaned'] = True
+                else:
+                    logger.warning(f"本地文件不存在，无需删除: {filepath}")
+                    response_data['local_file_cleaned'] = True
+            except Exception as e:
+                logger.error(f"删除本地文件时出错: {str(e)}")
+                response_data['local_file_cleaned'] = False
+                response_data['cleanup_error'] = str(e)
+        else:
+            response_data['local_file_cleaned'] = False
+            response_data['cleanup_reason'] = 'OSS上传失败，保留本地文件'
+        
+        # 发送完成通知
+        socketio.emit('audio_complete', response_data, namespace='/v1/chat/audio', room=session_id)
+        
+        # 清理会话数据
+        del audio_sessions[session_id]
+        
+    except Exception as e:
+        logger.error(f"处理完整音频数据时出错: {e}")
+        socketio.emit('error', {'message': f'处理音频数据时出错: {str(e)}'}, 
+                     namespace='/v1/chat/audio', room=session_id)
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
@@ -244,6 +775,18 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     })
 
+@app.route('/test')
+def test_page():
+    """测试页面"""
+    try:
+        with open('test/test_realtime_audio_stream.html', 'r', encoding='utf-8') as f:
+            content = f.read()
+            response = Response(content, mimetype='text/html')
+            return response
+    except FileNotFoundError:
+        return "测试页面未找到", 404
+
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # 使用SocketIO启动应用
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
