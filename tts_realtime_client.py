@@ -92,28 +92,28 @@ class TTSRealtimeClient:
                 event_type = event.get("type")
                 
                 if event_type == "error":
-                    print("错误: ", event.get('error', {}))
+                    logger.error(f"TTS API 错误: {event.get('error', {})}")
                     continue
                 elif event_type == "session.created":
-                    print("会话创建，ID: ", event.get('session', {}).get('id'))
+                    logger.info(f"TTS 会话创建，ID: {event.get('session', {}).get('id')}")
                 elif event_type == "session.updated":
-                    print("会话更新，ID: ", event.get('session', {}).get('id'))
+                    logger.info(f"TTS 会话更新，ID: {event.get('session', {}).get('id')}")
                 elif event_type == "response.audio.delta" and self.audio_callback:
                     audio_bytes = base64.b64decode(event.get("delta", ""))
                     self._audio_chunks.append(audio_bytes)
                     self.audio_callback(audio_bytes)
                 elif event_type == "response.audio.done":
-                    print("音频生成完成")
+                    logger.info("音频生成完成")
                 elif event_type == "response.done":
-                    print("响应完成")
+                    logger.info("响应完成")
                 elif event_type == "session.finished":
-                    print("会话已结束")
+                    logger.info("会话已结束")
                     break
 
         except websockets.exceptions.ConnectionClosed:
-            print("连接已关闭")
+            logger.warning("TTS WebSocket 连接已关闭")
         except Exception as e:
-            print("消息处理出错: ", str(e))
+            logger.error(f"处理TTS消息时出错: {str(e)}")
 
     async def close(self) -> None:
         """关闭 WebSocket 连接"""
@@ -127,7 +127,7 @@ class TTSRealtimeClient:
 def save_audio_to_file(audio_chunks: List[bytes], filename: str = "output.wav", sample_rate: int = 24000) -> bool:
     """将音频数据保存为 WAV 文件"""
     if not audio_chunks:
-        print("没有音频数据可保存")
+        logger.warning("没有音频数据可保存")
         return False
 
     try:
@@ -141,32 +141,21 @@ def save_audio_to_file(audio_chunks: List[bytes], filename: str = "output.wav", 
             wav_file.setframerate(sample_rate)
             wav_file.writeframes(audio_data)
         
-        print(f"音频已保存到: {filename}, 大小: {len(audio_data)} bytes")
+        logger.info(f"音频已保存到: {filename}, 大小: {len(audio_data)} bytes")
         return True
         
     except Exception as e:
-        print(f"保存音频文件失败: {str(e)}")
+        logger.error(f"保存音频文件失败: {str(e)}")
         return False
 
 async def synthesize_text_to_audio(text: str, base_url: str, api_key: str, voice: str = "Cherry", output_file: str = "output.wav") -> bool:
     """
     将文本转换为语音并保存为文件 - 简化版本
-    
-    Args:
-        text: 要合成的文本
-        base_url: TTS API URL
-        api_key: API密钥
-        voice: 声音类型
-        output_file: 输出文件路径
-        
-    Returns:
-        bool: 是否成功
     """
     audio_chunks = []
     
     def audio_callback(audio_bytes: bytes):
         audio_chunks.append(audio_bytes)
-        print(f"收到音频数据: {len(audio_bytes)} bytes")
 
     client = TTSRealtimeClient(
         base_url=base_url,
@@ -185,10 +174,10 @@ async def synthesize_text_to_audio(text: str, base_url: str, api_key: str, voice
         
         # 发送文本（分割为较小片段）
         text_fragments = split_text(text)
-        print("发送文本片段...")
+        logger.info("发送文本片段...")
         
         for fragment in text_fragments:
-            print(f"发送片段: {fragment}")
+            logger.info(f"发送片段: {fragment}")
             await client.append_text(fragment)
             await asyncio.sleep(0.1)  # 片段间稍作延时
 
@@ -207,7 +196,7 @@ async def synthesize_text_to_audio(text: str, base_url: str, api_key: str, voice
         return save_audio_to_file(audio_chunks, output_file)
         
     except Exception as e:
-        print(f"TTS合成过程中出错: {str(e)}")
+        logger.error(f"TTS合成过程中出错: {str(e)}")
         await client.close()
         return False
 
@@ -235,4 +224,4 @@ def split_text(text: str, max_chunk_size: int = 100) -> List[str]:
     if current_chunk:
         chunks.append(current_chunk)
         
-    return chunks if chunks else [text] 
+    return chunks if chunks else [text]

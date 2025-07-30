@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-from flask_socketio import SocketIO, emit, disconnect
+from flask_socketio import SocketIO, emit
 import requests
 import json
 import logging
@@ -8,21 +8,37 @@ from datetime import datetime
 import time
 import base64
 import os
+import asyncio
+import concurrent.futures
+
 from database import init_database, save_chat_record, get_chat_history
-from config import (QWEN_API_KEY, QWEN_API_CHAT_URL, QWEN_CHAT_MODEL, 
+from config import (QWEN_API_KEY, QWEN_API_CHAT_URL, QWEN_CHAT_MODEL,
                     REAL_TIME_AUDIO_URL, TTS_VOICE, TTS_SAMPLE_RATE, TTS_OUTPUT_DIR,
                     DEFAULT_SYSTEM_PROMPT, MAX_CONVERSATION_HISTORY)
 from up_to_oss import upload_audio_file, upload_and_cleanup
 from audio_transcription import transcribe_audio_from_url
 from chat_service import generate_chat_response_stream
-from tts_realtime_client import synthesize_text_to_audio
-import asyncio
+from tts_realtime_client import TTSRealtimeClient, SessionMode, synthesize_text_to_audio
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'  # 生产环境中应使用环境变量
 
+# 设置日志 - 只输出INFO级别
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# 设置第三方库日志级别
+logging.getLogger('werkzeug').setLevel(logging.WARNING)  # Flask服务器日志
+logging.getLogger('urllib3').setLevel(logging.WARNING)   # HTTP请求日志
+logging.getLogger('requests').setLevel(logging.WARNING)  # requests库日志
+logging.getLogger('websockets').setLevel(logging.WARNING) # websocket日志
+logging.getLogger('dashscope').setLevel(logging.WARNING)  # 阿里云SDK日志
+
 # 初始化SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
+socketio = SocketIO(app, cors_allowed_origins="*", logger=False, engineio_logger=False)
 
 # 配置CORS，允许跨域访问
 CORS(app, resources={
@@ -55,8 +71,6 @@ if not os.path.exists(TTS_OUTPUT_DIR):
 
 # 存储音频数据包的字典，按session_id组织
 audio_sessions = {}
-
-# 简化配置 - 不需要全局对象
 
 # 检查配置
 logger.info(f"QWEN_API_KEY: {'已设置' if QWEN_API_KEY else '未设置'}")
@@ -184,8 +198,6 @@ def handle_audio_message(message):
             logger.info(f"音频数据包接收完成，会话ID: {session_id}")
             process_complete_audio(session_id)
 
-            
-    
     except Exception as e:
         logger.error(f"处理音频数据包时出错: {e}")
         emit('error', {'message': f'处理数据包时出错: {str(e)}'})
@@ -288,7 +300,7 @@ def process_complete_audio(session_id):
                             # 标点符号，用于判断句子结束
                             sentence_endings = ['。', '！', '？', '.', '!', '?', '\n']
                             
-                            print("流式输出内容为：")
+                            logger.info("开始流式生成内容...")
                             
                             # 通知客户端开始TTS合成
                             socketio.emit('tts_started', {
@@ -296,11 +308,6 @@ def process_complete_audio(session_id):
                             }, namespace='/v1/chat/audio', room=session_id)
                             
                             # 创建单一TTS连接
-                            from tts_realtime_client import TTSRealtimeClient, SessionMode
-                            import base64
-                            
-                            # 用于跟踪TTS状态
-                            tts_finished = False
                             audio_chunks_sent = 0
                             
                             def audio_callback(audio_bytes: bytes):
@@ -332,7 +339,6 @@ def process_complete_audio(session_id):
                             for chunk in generate_chat_response_stream(user_message, DEFAULT_SYSTEM_PROMPT):
                                 assistant_response += chunk
                                 text_buffer += chunk
-                                print(chunk, end="", flush=True)
                                 
                                 # 实时发送流式响应给客户端
                                 socketio.emit('chat_chunk', {
@@ -365,7 +371,6 @@ def process_complete_audio(session_id):
                                     # 清空缓冲区
                                     text_buffer = ""
                             
-                            print()  # 换行
                             logger.info(f"对话生成完成，完整回答: {assistant_response}")
                             
                             # 处理剩余的文本缓冲区
@@ -409,8 +414,6 @@ def process_complete_audio(session_id):
                                 }
                             }
                         
-
-                        
                         # 执行流式对话和TTS
                         return loop.run_until_complete(streaming_chat_with_tts())
                         
@@ -424,7 +427,6 @@ def process_complete_audio(session_id):
                         loop.close()
                 
                 # 在线程池中执行
-                import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(process_streaming_chat_and_tts)
                     chat_result = future.result(timeout=120)  # 2分钟超时
@@ -438,7 +440,6 @@ def process_complete_audio(session_id):
                     
                     if user_message_for_db and assistant_response_for_db:
                         try:
-                            from database import save_chat_record
                             save_result = save_chat_record(user_message_for_db, assistant_response_for_db)
                             if save_result:
                                 logger.info("语音对话记录已保存到数据库")
@@ -459,7 +460,7 @@ def process_complete_audio(session_id):
                         'tts_success': tts_result.get('success', False),
                         'segments_count': tts_result.get('segments_count', 0),
                         'total_segments': tts_result.get('total_segments', 0),
-                        'db_saved': user_message_for_db and assistant_response_for_db  # 添加数据库保存状态
+                        'db_saved': user_message_for_db and assistant_response_for_db
                     }, namespace='/v1/chat/audio', room=session_id)
                 else:
                     logger.error(f"流式对话和TTS处理失败: {chat_result.get('error', '未知错误') if chat_result else '未知错误'}")

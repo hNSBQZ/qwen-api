@@ -1,6 +1,10 @@
 import pymysql
+import logging
 from config import DB_CONFIG
-from typing import List, Tuple
+from typing import List
+
+# 设置日志
+logger = logging.getLogger(__name__)
 
 def get_db_connection():
     """获取数据库连接"""
@@ -16,8 +20,8 @@ def get_db_connection():
 
 def init_database():
     """初始化数据库表"""
-    connection = get_db_connection()
     try:
+        connection = get_db_connection()
         with connection.cursor() as cursor:
             # 创建chat_records表
             create_table_sql = """
@@ -30,37 +34,40 @@ def init_database():
             """
             cursor.execute(create_table_sql)
         connection.commit()
-        print("数据库表初始化成功")
+        logger.info("数据库表初始化成功")
     except Exception as e:
-        print(f"数据库初始化失败: {e}")
+        logger.error(f"数据库初始化失败: {e}")
     finally:
-        connection.close()
+        if 'connection' in locals() and connection.open:
+            connection.close()
 
-def save_chat_record(user_prompt: str, model_response: str):
+def save_chat_record(user_prompt: str, model_response: str) -> bool:
     """保存聊天记录到数据库"""
-    connection = get_db_connection()
     try:
+        connection = get_db_connection()
         with connection.cursor() as cursor:
             sql = "INSERT INTO chat_records (user_prompt, model_response) VALUES (%s, %s)"
             cursor.execute(sql, (user_prompt, model_response))
         connection.commit()
         return True
     except Exception as e:
-        print(f"保存聊天记录失败: {e}")
+        logger.error(f"保存聊天记录失败: {e}")
         return False
     finally:
-        connection.close()
+        if 'connection' in locals() and connection.open:
+            connection.close()
 
 def get_chat_history(limit: int = 10) -> List[dict]:
     """获取聊天历史记录"""
-    connection = get_db_connection()
     try:
+        connection = get_db_connection()
         with connection.cursor() as cursor:
             sql = "SELECT * FROM chat_records ORDER BY created_at DESC LIMIT %s"
             cursor.execute(sql, (limit,))
             return cursor.fetchall()
     except Exception as e:
-        print(f"获取聊天历史记录失败: {e}")
+        logger.error(f"获取聊天历史记录失败: {e}")
         return []
     finally:
-        connection.close()
+        if 'connection' in locals() and connection.open:
+            connection.close()

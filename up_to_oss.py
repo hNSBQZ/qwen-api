@@ -5,7 +5,7 @@ import alibabacloud_oss_v2 as oss
 from config import ACCESSKEY_ID, ACCESSKEY_SECRET, BUCKET, REGIN
 
 # 设置日志
-logging.basicConfig(level=logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 def upload_file_to_oss(file_path, object_key=None, folder_prefix="audio"):
@@ -142,34 +142,3 @@ def upload_and_cleanup(file_path, keep_local=False):
         delete_local_file(file_path)
     
     return result
-
-# 测试函数
-def test_upload():
-    """测试上传功能"""
-    import tempfile
-    
-    # 创建一个临时测试文件
-    test_content = b"This is a test file for OSS upload"
-    
-    with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as temp_file:
-        temp_file.write(test_content)
-        temp_file_path = temp_file.name
-    
-    try:
-        # 测试上传
-        result = upload_file_to_oss(temp_file_path, "test/test_file.txt")
-        
-        if result:
-            print("✅ 上传测试成功")
-            print(f"文件URL: {result['file_url']}")
-        else:
-            print("❌ 上传测试失败")
-            
-    finally:
-        # 清理测试文件
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-
-if __name__ == "__main__":
-    # 运行测试
-    test_upload()

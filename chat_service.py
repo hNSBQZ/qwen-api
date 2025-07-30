@@ -1,5 +1,4 @@
 import logging
-import os
 from dashscope import Generation
 from config import QWEN_API_KEY, QWEN_CHAT_MODEL
 
@@ -52,36 +51,3 @@ def generate_chat_response_stream(user_message: str, system_prompt: str = "你�
     except Exception as e:
         logger.error(f"生成对话响应时出错: {str(e)}")
         yield f"抱歉，生成回答时出现错误：{str(e)}"
-
-def test_chat_service():
-    """测试对话服务"""
-    logger.info("开始测试对话服务...")
-    
-    test_message = "你好，请简单介绍一下你自己"
-    logger.info(f"测试消息: {test_message}")
-    
-    full_response = ""
-    print("流式输出内容为：")
-    
-    try:
-        for chunk in generate_chat_response_stream(test_message):
-            full_response += chunk
-            print(chunk, end="", flush=True)
-        
-        print()  # 换行
-        print(f"完整内容为：{full_response}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"对话服务测试失败: {str(e)}")
-        return False
-
-if __name__ == "__main__":
-    # 设置基本日志
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
-    )
-    
-    # 运行测试
-    test_chat_service() 
