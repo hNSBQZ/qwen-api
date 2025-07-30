@@ -432,6 +432,25 @@ def process_complete_audio(session_id):
                 if chat_result and chat_result['success']:
                     logger.info("流式对话和TTS合成完成")
                     
+                    # 保存用户提示词和AI回复到数据库
+                    user_message_for_db = transcription_result.get('text', '').strip()
+                    assistant_response_for_db = chat_result.get('assistant_response', '').strip()
+                    
+                    if user_message_for_db and assistant_response_for_db:
+                        try:
+                            from database import save_chat_record
+                            save_result = save_chat_record(user_message_for_db, assistant_response_for_db)
+                            if save_result:
+                                logger.info("语音对话记录已保存到数据库")
+                                logger.info(f"用户提示词: {user_message_for_db[:100]}{'...' if len(user_message_for_db) > 100 else ''}")
+                                logger.info(f"AI回复: {assistant_response_for_db[:100]}{'...' if len(assistant_response_for_db) > 100 else ''}")
+                            else:
+                                logger.warning("语音对话记录保存失败")
+                        except Exception as e:
+                            logger.error(f"保存语音对话记录时出错: {e}")
+                    else:
+                        logger.warning("用户提示词或AI回复为空，跳过数据库保存")
+                    
                     # 通知客户端完成
                     tts_result = chat_result.get('tts_result', {})
                     socketio.emit('chat_tts_complete', {
@@ -439,7 +458,8 @@ def process_complete_audio(session_id):
                         'assistant_response': chat_result['assistant_response'],
                         'tts_success': tts_result.get('success', False),
                         'segments_count': tts_result.get('segments_count', 0),
-                        'total_segments': tts_result.get('total_segments', 0)
+                        'total_segments': tts_result.get('total_segments', 0),
+                        'db_saved': user_message_for_db and assistant_response_for_db  # 添加数据库保存状态
                     }, namespace='/v1/chat/audio', room=session_id)
                 else:
                     logger.error(f"流式对话和TTS处理失败: {chat_result.get('error', '未知错误') if chat_result else '未知错误'}")
@@ -774,17 +794,6 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat()
     })
-
-@app.route('/test')
-def test_page():
-    """测试页面"""
-    try:
-        with open('test/test_realtime_audio_stream.html', 'r', encoding='utf-8') as f:
-            content = f.read()
-            response = Response(content, mimetype='text/html')
-            return response
-    except FileNotFoundError:
-        return "测试页面未找到", 404
 
 
 if __name__ == '__main__':
