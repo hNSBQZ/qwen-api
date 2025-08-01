@@ -312,11 +312,14 @@
         let isRecording = false;
         let receivedAudioChunks = [];
         let totalAudioChunks = 0;
+        let logUpdateTimer = null;
+        let pendingLogs = [];
+        let logSequence = 0;
         
-        // 日志函数
-        function log(message, type = 'info') {
-            const timestamp = new Date().toLocaleTimeString();
-            const logContainer = document.getElementById('logContainer');
+        // 修复时间顺序的日志函数
+        function log(message, type = 'info', immediate = false) {
+            const now = new Date();
+            const timestamp = now.toLocaleTimeString() + '.' + String(now.getMilliseconds()).padStart(3, '0');
             const typeIcon = {
                 'info': 'ℹ️',
                 'success': '✅',
@@ -324,13 +327,52 @@
                 'warning': '⚠️'
             }[type] || 'ℹ️';
             
-            logContainer.textContent += `[${timestamp}] ${typeIcon} ${message}\n`;
-            logContainer.scrollTop = logContainer.scrollHeight;
+            const logEntry = {
+                sequence: ++logSequence,
+                timestamp: timestamp,
+                text: `[${timestamp}] ${typeIcon} ${message}`,
+                type: type,
+                immediate: immediate || type === 'error' || type === 'success'
+            };
+            
             console.log(`[${type.toUpperCase()}] ${message}`);
+            
+            // 所有日志都加入队列，确保顺序
+            pendingLogs.push(logEntry);
+            
+            // 清除之前的定时器
+            if (logUpdateTimer) {
+                clearTimeout(logUpdateTimer);
+            }
+            
+            // 确定刷新延迟：重要日志立即刷新，普通日志延迟刷新
+            const hasImmediate = pendingLogs.some(entry => entry.immediate);
+            const delay = hasImmediate ? 0 : 50;
+            
+            logUpdateTimer = setTimeout(() => {
+                if (pendingLogs.length > 0) {
+                    // 按序列号排序确保时间顺序正确
+                    pendingLogs.sort((a, b) => a.sequence - b.sequence);
+                    
+                    const logContainer = document.getElementById('logContainer');
+                    const logTexts = pendingLogs.map(entry => entry.text);
+                    logContainer.textContent += logTexts.join('\n') + '\n';
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                    pendingLogs = [];
+                }
+                logUpdateTimer = null;
+            }, delay);
         }
         
         function clearLog() {
             document.getElementById('logContainer').textContent = '';
+            // 重置日志状态
+            pendingLogs = [];
+            logSequence = 0;
+            if (logUpdateTimer) {
+                clearTimeout(logUpdateTimer);
+                logUpdateTimer = null;
+            }
         }
         
         function downloadLog() {
@@ -422,11 +464,11 @@
             });
             
             socket.on('connected', function(data) {
-                log(`服务器确认连接: ${data.message}`, 'success');
+                log(`服务器确认连接: ${data.message}`, 'success', true);
             });
             
             socket.on('error', function(data) {
-                log(`错误: ${data.message}`, 'error');
+                log(`错误: ${data.message}`, 'error', true);
                 updateConnectionStatus('error', `错误: ${data.message}`);
             });
             
@@ -436,15 +478,15 @@
                 progressBar.style.width = `${progress}%`;
                 progressBar.textContent = `${progress.toFixed(1)}%`;
                 updateStats(data.total);
-                log(`数据包确认: ${data.received}/${data.total}`);
+                log(`数据包确认: ${data.received}/${data.total} (客户端接收时间)`, 'info', data.received === data.total);
             });
             
             socket.on('transcription_started', function(data) {
-                log(`开始语音识别: ${data.message}`, 'info');
+                log(`开始语音识别: ${data.message}`, 'info', true);
             });
             
             socket.on('chat_started', function(data) {
-                log(`开始AI对话: ${data.message}`, 'info');
+                log(`开始AI对话: ${data.message}`, 'info', true);
                 addMessage('user', data.user_message);
             });
             
@@ -461,7 +503,7 @@
             });
             
             socket.on('tts_started', function(data) {
-                log(`开始TTS合成: ${data.message}`, 'info');
+                log(`开始TTS合成: ${data.message}`, 'info', true);
                 
                 // 准备接收音频数据
                 receivedAudioChunks = [];
@@ -477,7 +519,16 @@
                     receivedAudioChunks.push(data.data);
                     totalAudioChunks++;
                     updateStats(null, null, totalAudioChunks);
-                    log(`接收音频块 ${totalAudioChunks}`, 'info');
+                    
+                    // 优化：减少频繁的base64解码和日志更新
+                    // 只有每10个音频块或特殊情况才显示详细日志
+                    if (totalAudioChunks % 10 === 0 || totalAudioChunks <= 3) {
+                        const chunkSize = atob(data.data).length;
+                        log(`接收音频块 ${totalAudioChunks} (大小: ${chunkSize} bytes)`, 'info', totalAudioChunks <= 3);
+                    } else {
+                        // 轻量级日志，不解码base64
+                        log(`接收音频块 ${totalAudioChunks}`, 'info');
+                    }
                     
                 } else if (data.event === 'finished') {
                     // 音频接收完成
@@ -485,7 +536,7 @@
                     for (const chunk of receivedAudioChunks) {
                         totalBytes += atob(chunk).length;
                     }
-                    log(`TTS音频流接收完成，共 ${receivedAudioChunks.length} 个音频块，总大小 ${totalBytes} bytes`, 'success');
+                    log(`TTS音频流接收完成，共 ${receivedAudioChunks.length} 个音频块，总大小 ${totalBytes} bytes`, 'success', true);
                     document.getElementById('audioStatus').textContent = `音频接收完成 (${receivedAudioChunks.length} 块)`;
                     document.getElementById('audioStatus2').textContent = '完成';
                     
@@ -497,7 +548,7 @@
                     // 延长自动断开时间，确保不会影响音频播放
                     setTimeout(() => {
                         if (socket && socket.connected) {
-                            log('音频接收完成，10秒后自动断开连接以释放资源', 'info');
+                            log('音频接收完成，10秒后自动断开连接以释放资源', 'info', true);
                             disconnect();
                         }
                     }, 10000);
@@ -505,11 +556,11 @@
             });
             
             socket.on('chat_tts_complete', function(data) {
-                log(`完整流程完成: ${data.message}`, 'success');
+                log(`完整流程完成: ${data.message}`, 'success', true);
             });
             
             socket.on('audio_complete', function(data) {
-                log(`音频处理完成: ${data.message}`, 'success');
+                log(`音频处理完成: ${data.message}`, 'success', true);
                 updateStats(data.packets, data.size);
                 document.getElementById('uploadProgress').classList.add('hidden');
             });
@@ -569,6 +620,7 @@
                     data: base64Chunk
                 };
                 
+                log(`发送数据包 ${i + 1}/${totalChunks} (大小: ${chunk.length} bytes)`, 'info');
                 socket.emit('message', packet);
                 
                 // 小延迟确保发送顺序

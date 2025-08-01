@@ -14,7 +14,7 @@ import concurrent.futures
 from database import init_database, save_chat_record, get_chat_history
 from config import (QWEN_API_KEY, QWEN_API_CHAT_URL, QWEN_CHAT_MODEL,
                     REAL_TIME_AUDIO_URL, TTS_VOICE, TTS_SAMPLE_RATE, TTS_OUTPUT_DIR,
-                    DEFAULT_SYSTEM_PROMPT, MAX_CONVERSATION_HISTORY)
+                    DEFAULT_SYSTEM_PROMPT)
 from up_to_oss import upload_audio_file, upload_and_cleanup
 from audio_transcription import transcribe_audio_from_url
 from chat_service import generate_chat_response_stream
@@ -86,9 +86,12 @@ def handle_audio_connect():
     
     # 初始化音频会话
     audio_sessions[session_id] = {
-        'packets': {},
+        'packets': {},  # 只存储乱序的包
         'total_packets': 0,
         'received_count': 0,
+        'expected_seq': 1,  # 期望的下一个包序号
+        'file_handle': None,  # 文件句柄
+        'filepath': None,  # 文件路径
         'start_time': datetime.now()
     }
     
@@ -100,8 +103,16 @@ def handle_audio_disconnect():
     session_id = request.sid
     logger.info(f"音频WebSocket连接断开: {session_id}")
     
-    # 清理会话数据
+    # 清理会话数据和文件句柄
     if session_id in audio_sessions:
+        session = audio_sessions[session_id]
+        # 确保文件句柄被正确关闭
+        if session.get('file_handle'):
+            try:
+                session['file_handle'].close()
+                logger.info(f"已关闭文件句柄: {session.get('filepath', 'unknown')}")
+            except Exception as e:
+                logger.error(f"关闭文件句柄时出错: {e}")
         del audio_sessions[session_id]
 
 @socketio.on('message', namespace='/v1/chat/audio')
@@ -157,81 +168,148 @@ def handle_audio_message(message):
             emit('error', {'message': f'无效的base64数据: {str(e)}'})
             return
         
-        logger.info(f"收到音频数据包 {seq}/{total}, 会话ID: {session_id}")
+        receive_timestamp = time.time()
+        logger.info(f"收到音频数据包 {seq}/{total}, 会话ID: {session_id}, 时间戳: {receive_timestamp:.3f}")
         
         # 获取或初始化会话
         if session_id not in audio_sessions:
             audio_sessions[session_id] = {
-                'packets': {},
+                'packets': {},  # 只存储乱序的包
                 'total_packets': 0,
                 'received_count': 0,
+                'expected_seq': 1,  # 期望的下一个包序号
+                'file_handle': None,  # 文件句柄
+                'filepath': None,  # 文件路径
                 'start_time': datetime.now()
             }
         
         session = audio_sessions[session_id]
         
-        # 设置总包数（第一次接收时）
+        # 设置总包数和创建文件（第一次接收时）
         if session['total_packets'] == 0:
             session['total_packets'] = total
+            # 创建音频文件
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"audio_{session_id}_{timestamp}.mp3"
+                filepath = os.path.join(AUDIO_STORAGE_DIR, filename)
+                session['filepath'] = filepath
+                session['file_handle'] = open(filepath, 'wb')
+                logger.info(f"创建音频文件: {filepath}")
+            except Exception as e:
+                logger.error(f"创建音频文件失败: {e}")
+                emit('error', {'message': f'创建音频文件失败: {str(e)}'})
+                return
         elif session['total_packets'] != total:
             emit('error', {'message': f'总包数不一致: 期望{session["total_packets"]}, 收到{total}'})
             return
         
-        # 检查是否重复接收
-        if seq in session['packets']:
-            emit('error', {'message': f'重复的数据包序号: {seq}'})
+        # 确保文件句柄存在
+        if not session.get('file_handle'):
+            logger.error(f"文件句柄不存在，会话状态异常")
+            emit('error', {'message': '文件句柄不存在，请重新连接'})
             return
         
-        # 存储数据包
-        session['packets'][seq] = audio_data
-        session['received_count'] += 1
+        # 安全检查：确保关键字段存在（防止异常情况下的状态不一致）
+        if 'expected_seq' not in session:
+            logger.warning(f"会话缺少expected_seq字段，重新初始化")
+            session['expected_seq'] = 1
+        if 'received_count' not in session:
+            logger.warning(f"会话缺少received_count字段，重新初始化")
+            session['received_count'] = 0
+        if 'packets' not in session:
+            logger.warning(f"会话缺少packets字段，重新初始化")
+            session['packets'] = {}
+        
+        # 检查是否重复接收
+        if seq in session['packets'] or seq < session['expected_seq']:
+            emit('error', {'message': f'重复或过期的数据包序号: {seq}'})
+            return
+        
+        # 解码音频数据
+        try:
+            packet_data = base64.b64decode(audio_data)
+        except Exception as e:
+            emit('error', {'message': f'解码音频数据失败: {str(e)}'})
+            return
+        
+        # 流式写入：检查是否是期望的包
+        if seq == session['expected_seq']:
+            # 按顺序到达，立即写入文件
+            session['file_handle'].write(packet_data)
+            session['file_handle'].flush()  # 确保写入磁盘
+            session['expected_seq'] += 1
+            session['received_count'] += 1
+            logger.info(f"流式写入数据包 {seq}, 大小: {len(packet_data)} bytes")
+            
+            # 检查暂存的包中是否有下一个期望的包
+            while session['expected_seq'] in session['packets']:
+                next_seq = session['expected_seq']
+                next_data = session['packets'].pop(next_seq)
+                next_packet_data = base64.b64decode(next_data)
+                session['file_handle'].write(next_packet_data)
+                session['file_handle'].flush()
+                session['expected_seq'] += 1
+                session['received_count'] += 1
+                logger.info(f"从缓存写入数据包 {next_seq}, 大小: {len(next_packet_data)} bytes")
+        else:
+            # 乱序到达，暂存在内存中
+            session['packets'][seq] = audio_data
+            logger.info(f"暂存乱序数据包 {seq}, 期望: {session['expected_seq']}")
         
         # 发送确认
+        ack_timestamp = time.time()
         emit('packet_ack', {
             'seq': seq,
             'received': session['received_count'],
             'total': session['total_packets']
         })
+        logger.info(f"发送ACK {seq}/{session['total_packets']}, 时间戳: {ack_timestamp:.3f}")
         
         # 检查是否接收完成
         if session['received_count'] == session['total_packets']:
-            logger.info(f"音频数据包接收完成，会话ID: {session_id}")
-            process_complete_audio(session_id)
+            # 关闭文件句柄
+            if session['file_handle']:
+                session['file_handle'].close()
+                session['file_handle'] = None
+            
+            # 检查是否有遗漏的包
+            if session['packets']:
+                missing_seqs = [str(s) for s in session['packets'].keys()]
+                logger.warning(f"检测到遗漏的数据包: {', '.join(missing_seqs)}")
+                emit('error', {'message': f'音频接收不完整，遗漏包: {", ".join(missing_seqs)}'})
+                return
+            
+            logger.info(f"音频流式写入完成，会话ID: {session_id}")
+            # 异步处理后续流程，避免阻塞WebSocket事件循环
+            socketio.start_background_task(process_complete_audio, session_id)
 
     except Exception as e:
         logger.error(f"处理音频数据包时出错: {e}")
+        # 清理文件句柄
+        if session_id in audio_sessions:
+            session = audio_sessions[session_id]
+            if session.get('file_handle'):
+                try:
+                    session['file_handle'].close()
+                    session['file_handle'] = None
+                    logger.info(f"异常清理：已关闭文件句柄: {session.get('filepath', 'unknown')}")
+                except:
+                    pass
         emit('error', {'message': f'处理数据包时出错: {str(e)}'})
 
 def process_complete_audio(session_id):
-    """处理完整的音频数据"""
+    """处理完整的音频数据 - 已流式写入完成"""
     try:
         session = audio_sessions[session_id]
+        filepath = session['filepath']
         
-        # 按序号重组音频数据
-        complete_audio_data = b""
-        for seq in range(1, session['total_packets'] + 1):
-            if seq not in session['packets']:
-                socketio.emit('error', {'message': f'缺少数据包: {seq}'}, 
-                            namespace='/v1/chat/audio', room=session_id)
-                return
-            
-            # 解码base64数据
-            packet_data = base64.b64decode(session['packets'][seq])
-            complete_audio_data += packet_data
-        
-        # 生成文件名
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"audio_{session_id}_{timestamp}.mp3"
-        filepath = os.path.join(AUDIO_STORAGE_DIR, filename)
-        
-        # 保存MP3文件
-        with open(filepath, 'wb') as f:
-            f.write(complete_audio_data)
-        
-        file_size = len(complete_audio_data)
+        # 获取文件大小和处理时长
+        file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
         duration = (datetime.now() - session['start_time']).total_seconds()
+        filename = os.path.basename(filepath)
         
-        logger.info(f"音频文件已保存: {filepath}, 大小: {file_size} bytes, 用时: {duration:.2f}s")
+        logger.info(f"音频流式写入完成: {filepath}, 大小: {file_size} bytes, 用时: {duration:.2f}s")
         
         # 上传到OSS
         oss_result = None
@@ -314,12 +392,13 @@ def process_complete_audio(session_id):
                                 nonlocal audio_chunks_sent
                                 audio_chunks_sent += 1
                                 # 发送音频数据给客户端 - 严格按照要求的格式
+                                audio_timestamp = time.time()
                                 audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
                                 socketio.emit('audio_stream', {
                                     'event': 'data',
                                     'data': audio_base64
                                 }, namespace='/v1/chat/audio', room=session_id)
-                                logger.debug(f"发送音频块 {audio_chunks_sent}, 大小: {len(audio_bytes)} bytes")
+                                logger.info(f"发送音频块 {audio_chunks_sent}, 大小: {len(audio_bytes)} bytes, 时间戳: {audio_timestamp:.3f}")
                             
                             client = TTSRealtimeClient(
                                 base_url=REAL_TIME_AUDIO_URL,
@@ -584,6 +663,16 @@ def process_complete_audio(session_id):
         
     except Exception as e:
         logger.error(f"处理完整音频数据时出错: {e}")
+        # 清理文件句柄和会话数据
+        if session_id in audio_sessions:
+            session = audio_sessions[session_id]
+            if session.get('file_handle'):
+                try:
+                    session['file_handle'].close()
+                    logger.info(f"异常清理：已关闭文件句柄: {session.get('filepath', 'unknown')}")
+                except:
+                    pass
+            del audio_sessions[session_id]
         socketio.emit('error', {'message': f'处理音频数据时出错: {str(e)}'}, 
                      namespace='/v1/chat/audio', room=session_id)
 

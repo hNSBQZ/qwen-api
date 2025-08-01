@@ -1,24 +1,28 @@
 import os
+from dotenv import load_dotenv
+
+# 加载.env文件中的环境变量
+load_dotenv()
 
 # ========== 千问API配置 ==========
 # 千问API密钥 - 从环境变量获取，或在此直接设置
 QWEN_API_KEY = os.getenv('QWEN_API_KEY', '')
 
 # 千问API聊天URL
-QWEN_API_CHAT_URL = os.getenv('QWEN_API_CHAT_URL', 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation')
+QWEN_API_CHAT_URL = os.getenv('QWEN_API_CHAT_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
 
 # 千问聊天模型
-QWEN_CHAT_MODEL = os.getenv('QWEN_CHAT_MODEL', 'qwen-plus')
+QWEN_CHAT_MODEL = os.getenv('QWEN_CHAT_MODEL', 'qwen3-32b')
 
 # 千问音频识别模型
-QWEN_AUDIO_RECOGNIZE_MODEL = os.getenv('QWEN_AUDIO_RECOGNIZE_MODEL', 'paraformer-realtime-v2')
+QWEN_AUDIO_RECOGNIZE_MODEL = os.getenv('QWEN_AUDIO_RECOGNIZE_MODEL', 'paraformer-v2')
 
 # ========== TTS配置 ==========
 # 实时音频URL
-REAL_TIME_AUDIO_URL = os.getenv('REAL_TIME_AUDIO_URL', 'wss://dashscope.aliyuncs.com/api/v1/services/aigc/text2speech/synthesis')
+REAL_TIME_AUDIO_URL = os.getenv('REAL_TIME_AUDIO_URL', 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-tts-realtime')
 
 # TTS语音
-TTS_VOICE = os.getenv('TTS_VOICE', 'cosyvoice-v1')
+TTS_VOICE = os.getenv('TTS_VOICE', 'Cherry')
 
 # TTS采样率
 TTS_SAMPLE_RATE = int(os.getenv('TTS_SAMPLE_RATE', 24000))
@@ -34,17 +38,17 @@ ACCESSKEY_ID = os.getenv('ACCESSKEY_ID', '')
 ACCESSKEY_SECRET = os.getenv('ACCESSKEY_SECRET', '')
 
 # OSS存储桶名称
-BUCKET = os.getenv('BUCKET', 'your-bucket-name')
+BUCKET = os.getenv('BUCKET', 'vlm-audio')
 
 # OSS区域
-REGIN = os.getenv('REGIN', 'oss-cn-hangzhou')
+REGIN = os.getenv('REGIN', 'cn-beijing')
 
 # ========== 数据库配置 ==========
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
+    'host': os.getenv('DB_HOST', '192.168.0.164'),
     'port': int(os.getenv('DB_PORT', 3306)),
-    'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', 'your-db-password'),
+    'user': os.getenv('DB_USER', 'hqz'),
+    'password': os.getenv('DB_PASSWORD', ''),
     'database': os.getenv('DB_NAME', 'qwen_chat')
 }
 
@@ -56,8 +60,9 @@ DEFAULT_SYSTEM_PROMPT = os.getenv('DEFAULT_SYSTEM_PROMPT', """你是一个智能
 3. 回答简洁明了，避免过于冗长
 4. 支持中文和英文交流
 5. 在不确定时会诚实地说明
+6. 不要在回答中加入无法转换为语音读出的字符
 
-请根据用户的语音输入，提供有用、准确的回答。""")
+""")
 
 # ========== 音频处理配置 ==========
 # FFmpeg路径 - 用于音频编码
