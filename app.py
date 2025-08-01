@@ -14,11 +14,19 @@ import concurrent.futures
 from database import init_database, save_chat_record, get_chat_history
 from config import (QWEN_API_KEY, QWEN_API_CHAT_URL, QWEN_CHAT_MODEL,
                     REAL_TIME_AUDIO_URL, TTS_VOICE, TTS_SAMPLE_RATE, TTS_OUTPUT_DIR,
-                    DEFAULT_SYSTEM_PROMPT)
+                    DEFAULT_SYSTEM_PROMPT, FFMPEG_PATH)
 from up_to_oss import upload_audio_file, upload_and_cleanup
 from audio_transcription import transcribe_audio_from_url
 from chat_service import generate_chat_response_stream
 from tts_realtime_client import TTSRealtimeClient, SessionMode, synthesize_text_to_audio
+from audio_converter import setup_ffmpeg, create_mp3_converter
+
+# 设置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 初始化FFmpeg
+setup_ffmpeg(FFMPEG_PATH)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'  # 生产环境中应使用环境变量
@@ -53,10 +61,6 @@ CORS(app, resources={
     }
 })
 
-# 设置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # 初始化数据库
 init_database()
 
@@ -71,6 +75,8 @@ if not os.path.exists(TTS_OUTPUT_DIR):
 
 # 存储音频数据包的字典，按session_id组织
 audio_sessions = {}
+
+
 
 # 检查配置
 logger.info(f"QWEN_API_KEY: {'已设置' if QWEN_API_KEY else '未设置'}")
@@ -385,20 +391,72 @@ def process_complete_audio(session_id):
                                 'message': '开始语音合成...'
                             }, namespace='/v1/chat/audio', room=session_id)
                             
-                            # 创建单一TTS连接
+                            # 创建单一TTS连接和音频处理队列
                             audio_chunks_sent = 0
+                            pcm_queue = asyncio.Queue()
+                            processing_active = True
                             
                             def audio_callback(audio_bytes: bytes):
-                                nonlocal audio_chunks_sent
-                                audio_chunks_sent += 1
-                                # 发送音频数据给客户端 - 严格按照要求的格式
-                                audio_timestamp = time.time()
-                                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                                socketio.emit('audio_stream', {
-                                    'event': 'data',
-                                    'data': audio_base64
-                                }, namespace='/v1/chat/audio', room=session_id)
-                                logger.info(f"发送音频块 {audio_chunks_sent}, 大小: {len(audio_bytes)} bytes, 时间戳: {audio_timestamp:.3f}")
+                                # 快速将PCM数据放入队列，不阻塞TTS通信
+                                try:
+                                    pcm_queue.put_nowait(audio_bytes)
+                                    logger.debug(f"PCM数据入队: {len(audio_bytes)} bytes")
+                                except asyncio.QueueFull:
+                                    logger.warning("PCM队列已满，丢弃数据")
+                            
+                            # 异步MP3转换和发送任务
+                            async def process_pcm_to_mp3():
+                                nonlocal audio_chunks_sent, processing_active
+                                mp3_converter = create_mp3_converter(
+                                    sample_rate=TTS_SAMPLE_RATE,
+                                    channels=1,
+                                    sample_width=2,
+                                    buffer_duration_ms=500
+                                )
+                                
+                                while processing_active:
+                                    try:
+                                        # 等待PCM数据
+                                        audio_bytes = await asyncio.wait_for(pcm_queue.get(), timeout=0.1)
+                                        
+                                        # 转换为MP3
+                                        mp3_data = mp3_converter.add_pcm_data(audio_bytes)
+                                        
+                                        if mp3_data:
+                                            audio_chunks_sent += 1
+                                            audio_timestamp = time.time()
+                                            
+                                            # 发送MP3数据给客户端
+                                            mp3_base64 = base64.b64encode(mp3_data).decode('utf-8')
+                                            socketio.emit('audio_stream', {
+                                                'event': 'data',
+                                                'data': mp3_base64
+                                            }, namespace='/v1/chat/audio', room=session_id)
+                                            
+                                            logger.info(f"发送MP3音频块 {audio_chunks_sent}, PCM: {len(audio_bytes)} bytes -> MP3: {len(mp3_data)} bytes, 时间戳: {audio_timestamp:.3f}")
+                                        
+                                        pcm_queue.task_done()
+                                        
+                                    except asyncio.TimeoutError:
+                                        # 没有新数据，继续循环
+                                        continue
+                                    except Exception as e:
+                                        logger.error(f"MP3转换处理出错: {e}")
+                                        break
+                                
+                                # 处理剩余数据
+                                remaining_mp3 = mp3_converter.flush_remaining()
+                                if remaining_mp3:
+                                    audio_chunks_sent += 1
+                                    mp3_base64 = base64.b64encode(remaining_mp3).decode('utf-8')
+                                    socketio.emit('audio_stream', {
+                                        'event': 'data',
+                                        'data': mp3_base64
+                                    }, namespace='/v1/chat/audio', room=session_id)
+                                    logger.info(f"发送最后的MP3音频块 {audio_chunks_sent}, 大小: {len(remaining_mp3)} bytes")
+                            
+                            # 启动MP3处理任务
+                            mp3_task = asyncio.create_task(process_pcm_to_mp3())
                             
                             client = TTSRealtimeClient(
                                 base_url=REAL_TIME_AUDIO_URL,
@@ -476,13 +534,27 @@ def process_complete_audio(session_id):
                             # 关闭TTS连接
                             await client.close()
                             
+                            # 停止MP3处理任务
+                            processing_active = False
+                            
+                            # 等待MP3处理任务完成
+                            try:
+                                await asyncio.wait_for(mp3_task, timeout=5.0)
+                                logger.info("MP3处理任务完成")
+                            except asyncio.TimeoutError:
+                                logger.warning("MP3处理任务超时，强制取消")
+                                mp3_task.cancel()
+                            except Exception as e:
+                                logger.error(f"MP3处理任务出错: {e}")
+                                mp3_task.cancel()
+                            
                             # 发送完成信号 - 严格按照要求的格式
                             socketio.emit('audio_stream', {
                                 'event': 'finished'
                             }, namespace='/v1/chat/audio', room=session_id)
                             
                             logger.info(f"✅ 发送完成信号给客户端")
-                            logger.info(f"单一连接TTS合成完成，总共发送 {audio_chunks_sent} 个音频块")
+                            logger.info(f"单一连接MP3流式合成完成，总共发送 {audio_chunks_sent} 个MP3音频块")
                             
                             return {
                                 'success': True,

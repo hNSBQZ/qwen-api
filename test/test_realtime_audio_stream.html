@@ -692,7 +692,7 @@
             }
         }
         
-        // 音频播放
+        // 音频播放 - 现在接收的是MP3数据
         function playReceivedAudio() {
             if (receivedAudioChunks.length === 0) {
                 log('没有接收到音频数据', 'warning');
@@ -700,7 +700,7 @@
             }
             
             try {
-                // 将Base64音频块转换为ArrayBuffer
+                // 将Base64 MP3数据块转换为二进制数据
                 const audioDataArrays = receivedAudioChunks.map(base64Chunk => {
                     const binaryString = atob(base64Chunk);
                     const bytes = new Uint8Array(binaryString.length);
@@ -710,7 +710,7 @@
                     return bytes;
                 });
                 
-                // 合并所有音频数据
+                // 合并所有MP3数据
                 const totalLength = audioDataArrays.reduce((sum, arr) => sum + arr.length, 0);
                 const mergedArray = new Uint8Array(totalLength);
                 let offset = 0;
@@ -719,9 +719,9 @@
                     offset += arr.length;
                 }
                 
-                // 创建WAV文件
-                const wavBlob = createWAVBlob(mergedArray, 24000, 1);
-                const audioUrl = URL.createObjectURL(wavBlob);
+                // 直接创建MP3 Blob并播放
+                const mp3Blob = new Blob([mergedArray], { type: 'audio/mpeg' });
+                const audioUrl = URL.createObjectURL(mp3Blob);
                 
                 const audioPlayer = document.getElementById('audioPlayer');
                 audioPlayer.src = audioUrl;
@@ -729,7 +729,7 @@
                 audioPlayer.play();
                 
                 document.getElementById('stopBtn').disabled = false;
-                log(`开始播放接收的音频 (${mergedArray.length} bytes)`, 'success');
+                log(`开始播放接收的MP3音频 (${mergedArray.length} bytes)`, 'success');
                 
             } catch (error) {
                 log(`音频播放失败: ${error.message}`, 'error');
@@ -751,7 +751,7 @@
             }
             
             try {
-                // 转换音频数据
+                // 转换MP3音频数据
                 const audioDataArrays = receivedAudioChunks.map(base64Chunk => {
                     const binaryString = atob(base64Chunk);
                     const bytes = new Uint8Array(binaryString.length);
@@ -769,18 +769,18 @@
                     offset += arr.length;
                 }
                 
-                // 创建WAV文件并下载
-                const wavBlob = createWAVBlob(mergedArray, 24000, 1);
-                const url = URL.createObjectURL(wavBlob);
+                // 创建MP3文件并下载
+                const mp3Blob = new Blob([mergedArray], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(mp3Blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `tts_audio_${new Date().toISOString().slice(0,19)}.wav`;
+                a.download = `tts_audio_${new Date().toISOString().slice(0,19)}.mp3`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
                 
-                log(`音频文件下载完成 (${mergedArray.length} bytes)`, 'success');
+                log(`MP3音频文件下载完成 (${mergedArray.length} bytes)`, 'success');
                 
             } catch (error) {
                 log(`音频下载失败: ${error.message}`, 'error');
@@ -801,10 +801,10 @@
                 totalActualSize += atob(chunk).length;
             }
             
-            debugText += '=== 音频数据统计 ===\n';
-            debugText += `实际音频大小: ${totalActualSize} bytes\n`;
-            debugText += `平均块大小: ${Math.round(totalActualSize / receivedAudioChunks.length)} bytes\n`;
-            debugText += `估算时长: ${(totalActualSize / (24000 * 2)).toFixed(2)} 秒\n\n`;
+            debugText += '=== MP3音频数据统计 ===\n';
+            debugText += `MP3音频总大小: ${totalActualSize} bytes\n`;
+            debugText += `平均MP3块大小: ${Math.round(totalActualSize / receivedAudioChunks.length)} bytes\n`;
+            debugText += `压缩率: MP3格式，已压缩\n\n`;
             
             // 显示前5个和后5个音频块的大小
             debugText += '=== 音频块样本 ===\n';
@@ -818,9 +818,10 @@
             }
             debugText += '\n';
             
-            // 单一连接保证顺序
-            debugText += '\n=== 顺序保证 ===\n';
-            debugText += '使用单一TTS连接，天然保证音频块顺序正确\n';
+            // MP3流式传输说明
+            debugText += '\n=== MP3流式传输 ===\n';
+            debugText += '服务器端PCM→MP3实时转换，500ms缓冲区\n';
+            debugText += '客户端接收MP3数据块，直接合并播放\n';
             debugText += '音频块按接收顺序播放，无需额外排序\n';
             
             debugDiv.textContent = debugText;

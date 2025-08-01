@@ -66,4 +66,4 @@ DEFAULT_SYSTEM_PROMPT = os.getenv('DEFAULT_SYSTEM_PROMPT', """你是一个智能
 
 # ========== 音频处理配置 ==========
 # FFmpeg路径 - 用于音频编码
-FFMPEG_PATH = os.getenv('FFMPEG_PATH', 'ffmpeg')  # 假设ffmpeg在系统PATH中
+FFMPEG_PATH = os.getenv('FFMPEG_PATH', r'D:\ffmpeg-7.0.2-essentials_build\ffmpeg-7.0.2-essentials_build\bin\ffmpeg.exe')  # 假设ffmpeg在系统PATH中
