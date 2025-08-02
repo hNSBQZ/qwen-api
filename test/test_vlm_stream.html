@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多模态VLM测试</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .content {
+            padding: 20px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+        
+        .section h3 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        
+        button:hover:not(:disabled) {
+            background: #5a6fd8;
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        button.danger {
+            background: #e74c3c;
+        }
+        
+        button.danger:hover:not(:disabled) {
+            background: #c0392b;
+        }
+        
+        input[type="file"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            margin-bottom: 10px;
+            display: block;
+            width: 100%;
+            max-width: 300px;
+        }
+        
+        .status {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-weight: bold;
+        }
+        
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .log {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.4;
+        }
+        
+        .progress {
+            background: #ecf0f1;
+            border-radius: 10px;
+            padding: 3px;
+            margin: 10px 0;
+        }
+        
+        .progress-bar {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            height: 20px;
+            border-radius: 7px;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .audio-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+        
+        .info-card {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+            text-align: center;
+        }
+        
+        .info-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+            display: block;
+        }
+        
+        .info-card .label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .chat-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            background: white;
+            margin: 15px 0;
+        }
+        
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 6px;
+        }
+        
+        .message.user {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .message.assistant {
+            background: #f3e5f5;
+            border-left: 4px solid #9c27b0;
+        }
+        
+        .message .role {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        
+        .hidden {
+            display: none;
+        }
+
+        #audioPlayer {
+            width: 100%;
+            margin-top: 10px;
+        }
+        
+        .image-preview {
+            max-width: 300px;
+            max-height: 200px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+        
+        .file-info {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎭 多模态VLM测试</h1>
+            <p>测试图像+音频上传 → 语音识别 → 多模态AI对话 → 实时TTS流</p>
+        </div>
+        
+        <div class="content">
+            <!-- 连接状态 -->
+            <div class="section">
+                <h3>📡 连接状态</h3>
+                <div id="connectionStatus" class="status connecting">正在连接...</div>
+                <div class="controls">
+                    <button id="connectBtn" onclick="connect()">连接</button>
+                    <button id="disconnectBtn" onclick="disconnect()" disabled>断开连接</button>
+                </div>
+            </div>
+            
+            <!-- 文件上传 -->
+            <div class="section">
+                <h3>📁 文件上传</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div>
+                        <h4>🖼️ 图像文件</h4>
+                        <input type="file" id="imageFile" accept="image/*" onchange="previewImage()" />
+                        <img id="imagePreview" class="image-preview hidden" />
+                        <div id="imageInfo" class="file-info"></div>
+                    </div>
+                    <div>
+                        <h4>🎵 音频文件</h4>
+                        <input type="file" id="audioFile" accept="audio/*" onchange="showAudioInfo()" />
+                        <button id="recordBtn" onclick="toggleRecording()" disabled>开始录音</button>
+                        <div id="audioInfo" class="file-info"></div>
+                    </div>
+                </div>
+                <div class="controls" style="margin-top: 20px;">
+                    <button id="uploadBtn" onclick="uploadFiles()" disabled>上传文件并开始处理</button>
+                </div>
+                <div id="uploadProgress" class="progress hidden">
+                    <div id="uploadProgressBar" class="progress-bar" style="width: 0%">0%</div>
+                </div>
+            </div>
+            
+            <!-- 实时统计 -->
+            <div class="section">
+                <h3>📊 实时统计</h3>
+                <div class="audio-info">
+                    <div class="info-card">
+                        <span class="value" id="totalPackets">0</span>
+                        <div class="label">总数据包</div>
+                    </div>
+                    <div class="info-card">
+                        <span class="value" id="imageSize">0 KB</span>
+                        <div class="label">图像大小</div>
+                    </div>
+                    <div class="info-card">
+                        <span class="value" id="audioSize">0 KB</span>
+                        <div class="label">音频大小</div>
+                    </div>
+                    <div class="info-card">
+                        <span class="value" id="processingStatus">等待</span>
+                        <div class="label">处理状态</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 对话显示 -->
+            <div class="section">
+                <h3>💬 对话内容</h3>
+                <div id="chatContainer" class="chat-container"></div>
+            </div>
+            
+            <!-- 音频播放 -->
+            <div class="section">
+                <h3>🔊 音频播放</h3>
+                <div class="controls">
+                    <button id="playBtn" onclick="playReceivedAudio()" disabled>播放完整音频</button>
+                    <button id="stopBtn" onclick="stopAudio()" disabled>停止播放</button>
+                    <button id="stopRealtimeBtn" onclick="stopRealtimeAudio()">停止实时播放</button>
+                    <button id="downloadBtn" onclick="downloadAudio()" disabled>下载音频</button>
+                </div>
+                <audio id="audioPlayer" controls style="display: none;"></audio>
+                <div id="audioStatus">等待音频数据...</div>
+            </div>
+            
+            <!-- 日志 -->
+            <div class="section">
+                <h3>📝 详细日志</h3>
+                <div class="controls">
+                    <button onclick="clearLog()">清空日志</button>
+                    <button onclick="downloadLog()">下载日志</button>
+                </div>
+                <div id="logContainer" class="log"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let sessionId = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let receivedAudioChunks = [];
+        let totalAudioChunks = 0;
+        let audioContext = null;
+        let audioBufferQueue = [];
+        let isPlaying = false;
+        let nextStartTime = 0;
+        let logUpdateTimer = null;
+        let pendingLogs = [];
+        let logSequence = 0;
+        
+        // 修复时间顺序的日志函数
+        function log(message, type = 'info', immediate = false) {
+            const now = new Date();
+            const timestamp = now.toLocaleTimeString() + '.' + String(now.getMilliseconds()).padStart(3, '0');
+            const typeIcon = {
+                'info': 'ℹ️',
+                'success': '✅',
+                'error': '❌',
+                'warning': '⚠️'
+            }[type] || 'ℹ️';
+            
+            const logEntry = {
+                sequence: ++logSequence,
+                timestamp: timestamp,
+                text: `[${timestamp}] ${typeIcon} ${message}`,
+                type: type,
+                immediate: immediate || type === 'error' || type === 'success'
+            };
+            
+            console.log(`[${type.toUpperCase()}] ${message}`);
+            
+            // 所有日志都加入队列，确保顺序
+            pendingLogs.push(logEntry);
+            
+            // 清除之前的定时器
+            if (logUpdateTimer) {
+                clearTimeout(logUpdateTimer);
+            }
+            
+            // 确定刷新延迟：重要日志立即刷新，普通日志减少延迟
+            const hasImmediate = pendingLogs.some(entry => entry.immediate);
+            const delay = hasImmediate ? 0 : 10;
+            
+            logUpdateTimer = setTimeout(() => {
+                if (pendingLogs.length > 0) {
+                    // 按序列号排序确保时间顺序正确
+                    pendingLogs.sort((a, b) => a.sequence - b.sequence);
+                    
+                    const logContainer = document.getElementById('logContainer');
+                    const logTexts = pendingLogs.map(entry => entry.text);
+                    logContainer.textContent += logTexts.join('\n') + '\n';
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                    pendingLogs = [];
+                }
+                logUpdateTimer = null;
+            }, delay);
+        }
+        
+        function clearLog() {
+            document.getElementById('logContainer').textContent = '';
+            // 重置日志状态
+            pendingLogs = [];
+            logSequence = 0;
+            if (logUpdateTimer) {
+                clearTimeout(logUpdateTimer);
+                logUpdateTimer = null;
+            }
+        }
+        
+        function downloadLog() {
+            const logContent = document.getElementById('logContainer').textContent;
+            const blob = new Blob([logContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `vlm_test_log_${new Date().toISOString().slice(0,19)}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+        
+        // 更新UI状态
+        function updateConnectionStatus(status, message) {
+            const statusDiv = document.getElementById('connectionStatus');
+            statusDiv.className = `status ${status}`;
+            statusDiv.textContent = message;
+            
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            const uploadBtn = document.getElementById('uploadBtn');
+            const recordBtn = document.getElementById('recordBtn');
+            
+            if (status === 'connected') {
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                recordBtn.disabled = false;
+                updateUploadButtonState();
+            } else {
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                uploadBtn.disabled = true;
+                recordBtn.disabled = true;
+            }
+        }
+        
+        function updateUploadButtonState() {
+            const imageFile = document.getElementById('imageFile').files[0];
+            const audioFile = document.getElementById('audioFile').files[0];
+            const uploadBtn = document.getElementById('uploadBtn');
+            const connected = socket && socket.connected;
+            
+            uploadBtn.disabled = !connected || !imageFile || !audioFile;
+        }
+        
+        function updateStats(imageSize = null, audioSize = null, totalPackets = null) {
+            if (imageSize !== null) document.getElementById('imageSize').textContent = `${(imageSize / 1024).toFixed(2)} KB`;
+            if (audioSize !== null) document.getElementById('audioSize').textContent = `${(audioSize / 1024).toFixed(2)} KB`;
+            if (totalPackets !== null) document.getElementById('totalPackets').textContent = totalPackets;
+        }
+        
+        function updateProcessingStatus(status) {
+            document.getElementById('processingStatus').textContent = status;
+        }
+        
+        function addMessage(role, content) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            messageDiv.innerHTML = `
+                <div class="role">${role === 'user' ? '👤 用户' : '🤖 助手'}</div>
+                <div class="content">${content}</div>
+            `;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        function previewImage() {
+            const fileInput = document.getElementById('imageFile');
+            const preview = document.getElementById('imagePreview');
+            const info = document.getElementById('imageInfo');
+            const file = fileInput.files[0];
+            
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.src = e.target.result;
+                    preview.classList.remove('hidden');
+                };
+                reader.readAsDataURL(file);
+                
+                info.textContent = `文件: ${file.name}, 大小: ${(file.size / 1024).toFixed(2)} KB, 类型: ${file.type}`;
+                updateStats(file.size);
+            } else {
+                preview.classList.add('hidden');
+                info.textContent = '';
+            }
+            
+            updateUploadButtonState();
+        }
+        
+        function showAudioInfo() {
+            const fileInput = document.getElementById('audioFile');
+            const info = document.getElementById('audioInfo');
+            const file = fileInput.files[0];
+            
+            if (file) {
+                info.textContent = `文件: ${file.name}, 大小: ${(file.size / 1024).toFixed(2)} KB, 类型: ${file.type}`;
+                updateStats(null, file.size);
+            } else {
+                info.textContent = '';
+            }
+            
+            updateUploadButtonState();
+        }
+        
+        // WebSocket连接
+        function connect() {
+            if (socket && socket.connected) {
+                log('已经连接', 'warning');
+                return;
+            }
+            
+            updateConnectionStatus('connecting', '正在连接...');
+            log('开始连接VLM WebSocket...');
+            
+            socket = io('http://localhost:5000/v1/chat/vlm', {
+                transports: ['websocket'],
+                timeout: 60000,
+                pingTimeout: 60000,
+                pingInterval: 25000
+            });
+            
+            socket.on('connect', function() {
+                sessionId = socket.id;
+                updateConnectionStatus('connected', `已连接 (${sessionId})`);
+                log(`VLM WebSocket连接成功，会话ID: ${sessionId}`, 'success');
+                
+                // 重置状态
+                receivedAudioChunks = [];
+                totalAudioChunks = 0;
+                updateStats(null, null, 0);
+                updateProcessingStatus('等待');
+                document.getElementById('chatContainer').innerHTML = '';
+            });
+            
+            socket.on('disconnect', function(reason) {
+                updateConnectionStatus('error', `连接断开: ${reason}`);
+                log(`VLM WebSocket连接断开: ${reason}`, 'error');
+                sessionId = null;
+            });
+            
+            socket.on('connected', function(data) {
+                log(`服务器确认连接: ${data.message}`, 'success', true);
+            });
+            
+            socket.on('error', function(data) {
+                log(`错误: ${data.message}`, 'error', true);
+                updateConnectionStatus('error', `错误: ${data.message}`);
+            });
+            
+            socket.on('packet_ack', function(data) {
+                log(`${data.type}数据包确认: ${data.received}/${data.total}`, 'info');
+            });
+            
+            socket.on('transcription_started', function(data) {
+                log(`开始语音识别: ${data.message}`, 'info', true);
+                updateProcessingStatus('语音识别');
+            });
+            
+            socket.on('vlm_chat_started', function(data) {
+                log(`开始多模态对话: ${data.message}`, 'info', true);
+                updateProcessingStatus('多模态对话');
+                addMessage('user', `${data.user_message} [包含图像]`);
+            });
+            
+            socket.on('vlm_chat_chunk', function(data) {
+                // 更新助手消息内容
+                let lastMessage = document.querySelector('.message.assistant:last-child');
+                if (!lastMessage) {
+                    addMessage('assistant', '');
+                    lastMessage = document.querySelector('.message.assistant:last-child');
+                }
+                
+                const contentDiv = lastMessage.querySelector('.content');
+                contentDiv.textContent = data.full_response;
+            });
+            
+            socket.on('tts_started', function(data) {
+                log(`开始TTS合成: ${data.message}`, 'info', true);
+                updateProcessingStatus('TTS合成');
+                
+                // 准备接收音频数据和实时播放
+                receivedAudioChunks = [];
+                totalAudioChunks = 0;
+                audioBufferQueue = [];
+                isPlaying = false;
+                nextStartTime = 0;
+                
+                // 初始化AudioContext用于实时播放
+                initAudioContext();
+                
+                document.getElementById('audioStatus').textContent = '正在接收音频数据...';
+            });
+            
+            socket.on('audio_stream', function(data) {
+                if (data.event === 'data') {
+                    // 直接按顺序接收音频数据
+                    receivedAudioChunks.push(data.data);
+                    totalAudioChunks++;
+                    
+                    // 实时播放音频块
+                    playAudioChunkRealtime(data.data);
+                    
+                    // 优化日志显示：更频繁显示前几个块，然后每5个显示一次
+                    if (totalAudioChunks <= 5 || totalAudioChunks % 5 === 0) {
+                        const chunkSize = atob(data.data).length;
+                        log(`🎵 接收音频块 ${totalAudioChunks} (${chunkSize} bytes)`, 'info', totalAudioChunks <= 3);
+                    }
+                    
+                } else if (data.event === 'finished') {
+                    // 音频接收完成
+                    let totalBytes = 0;
+                    for (const chunk of receivedAudioChunks) {
+                        totalBytes += atob(chunk).length;
+                    }
+                    log(`TTS音频流接收完成，共 ${receivedAudioChunks.length} 个音频块，总大小 ${totalBytes} bytes`, 'success', true);
+                    document.getElementById('audioStatus').textContent = `音频接收完成 (${receivedAudioChunks.length} 块)`;
+                    updateProcessingStatus('完成');
+                    
+                    // 实时播放完成
+                    setTimeout(() => {
+                        log('🎵 实时音频播放完成', 'success', true);
+                    }, 1000);
+                    
+                    // 启用播放按钮
+                    document.getElementById('playBtn').disabled = false;
+                    document.getElementById('downloadBtn').disabled = false;
+                    
+                    // 自动断开连接
+                    setTimeout(() => {
+                        if (socket && socket.connected) {
+                            log('VLM处理完成，5秒后自动断开连接', 'info', true);
+                            disconnect();
+                        }
+                    }, 5000);
+                }
+            });
+            
+            socket.on('vlm_chat_tts_complete', function(data) {
+                log(`VLM完整流程完成: ${data.message}`, 'success', true);
+            });
+            
+            socket.on('vlm_complete', function(data) {
+                log(`VLM处理完成: ${data.message}`, 'success', true);
+                updateStats(data.image_size, data.audio_size);
+            });
+        }
+        
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                updateConnectionStatus('error', '已断开连接');
+                log('手动断开VLM WebSocket连接', 'info');
+                
+                // 停止实时音频播放
+                stopRealtimeAudio();
+            }
+        }
+        
+        // 文件上传
+        async function uploadFiles() {
+            const imageFile = document.getElementById('imageFile').files[0];
+            const audioFile = document.getElementById('audioFile').files[0];
+            
+            if (!imageFile || !audioFile) {
+                log('请选择图像和音频文件', 'error');
+                return;
+            }
+            
+            if (!socket || !socket.connected) {
+                log('请先连接WebSocket', 'error');
+                return;
+            }
+            
+            log(`开始上传文件: 图像=${imageFile.name} (${(imageFile.size / 1024).toFixed(2)} KB), 音频=${audioFile.name} (${(audioFile.size / 1024).toFixed(2)} KB)`, 'info');
+            
+            // 显示进度条
+            document.getElementById('uploadProgress').classList.remove('hidden');
+            document.getElementById('uploadProgressBar').style.width = '0%';
+            document.getElementById('uploadProgressBar').textContent = '0%';
+            updateProcessingStatus('上传中');
+            
+            try {
+                // 先发送图像文件
+                await uploadFile(imageFile, 'image');
+                log('图像文件发送完成', 'success');
+                
+                // 再发送音频文件
+                await uploadFile(audioFile, 'audio');
+                log('音频文件发送完成', 'success');
+                
+                // 发送结束信号
+                socket.emit('message', { type: 'end' });
+                log('已发送结束信号，开始VLM处理', 'success');
+                
+            } catch (error) {
+                log(`文件上传失败: ${error.message}`, 'error');
+                updateProcessingStatus('上传失败');
+            }
+        }
+        
+        async function uploadFile(file, type) {
+            const arrayBuffer = await file.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
+            
+            const CHUNK_SIZE = 32768; // 32KB chunks for images, 8KB for audio
+            const totalChunks = Math.ceil(uint8Array.length / CHUNK_SIZE);
+            
+            log(`开始发送${type}文件，共 ${totalChunks} 个数据包`, 'info');
+            
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, uint8Array.length);
+                const chunk = uint8Array.slice(start, end);
+                
+                // Convert to base64
+                const base64Chunk = btoa(String.fromCharCode.apply(null, chunk));
+                
+                const packet = {
+                    seq: i + 1,
+                    total: totalChunks,
+                    type: type,
+                    data: base64Chunk
+                };
+                
+                log(`发送${type}数据包 ${i + 1}/${totalChunks} (大小: ${chunk.length} bytes)`, 'info');
+                socket.emit('message', packet);
+                
+                // 更新进度
+                const progress = ((i + 1) / totalChunks) * 100;
+                document.getElementById('uploadProgressBar').style.width = `${progress}%`;
+                document.getElementById('uploadProgressBar').textContent = `${progress.toFixed(1)}%`;
+                
+                // 小延迟确保发送顺序
+                await new Promise(resolve => setTimeout(resolve, 5));
+            }
+        }
+        
+        // 录音功能（与原版相同）
+        async function toggleRecording() {
+            const recordBtn = document.getElementById('recordBtn');
+            
+            if (!isRecording) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            sampleRate: 16000,
+                            channelCount: 1,
+                            echoCancellation: true,
+                            noiseSuppression: true
+                        }
+                    });
+                    
+                    mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'audio/webm'
+                    });
+                    
+                    audioChunks = [];
+                    
+                    mediaRecorder.ondataavailable = function(event) {
+                        audioChunks.push(event.data);
+                    };
+                    
+                    mediaRecorder.onstop = async function() {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        
+                        // 创建临时文件input并触发上传
+                        const file = new File([audioBlob], 'recording.webm', { type: 'audio/webm' });
+                        const fileInput = document.getElementById('audioFile');
+                        
+                        // 模拟文件选择
+                        const dataTransfer = new DataTransfer();
+                        dataTransfer.items.add(file);
+                        fileInput.files = dataTransfer.files;
+                        
+                        log(`录音完成: ${(audioBlob.size / 1024).toFixed(2)} KB`, 'success');
+                        showAudioInfo();
+                    };
+                    
+                    mediaRecorder.start();
+                    isRecording = true;
+                    recordBtn.textContent = '停止录音';
+                    recordBtn.style.background = '#e74c3c';
+                    log('开始录音...', 'info');
+                    
+                } catch (error) {
+                    log(`录音失败: ${error.message}`, 'error');
+                }
+            } else {
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                isRecording = false;
+                recordBtn.textContent = '开始录音';
+                recordBtn.style.background = '#667eea';
+                log('录音已停止', 'info');
+            }
+        }
+        
+        // 音频播放功能（与原版相同）
+        function initAudioContext() {
+            if (!audioContext) {
+                try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    log('🎵 AudioContext初始化成功', 'success');
+                } catch (error) {
+                    log(`AudioContext初始化失败: ${error.message}`, 'error');
+                }
+            }
+        }
+        
+        async function playAudioChunkRealtime(base64Data) {
+            if (!audioContext) {
+                return;
+            }
+            
+            try {
+                const binaryString = atob(base64Data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                const audioBuffer = await audioContext.decodeAudioData(bytes.buffer.slice());
+                
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+                
+                const currentTime = audioContext.currentTime;
+                const startTime = Math.max(currentTime, nextStartTime);
+                
+                source.start(startTime);
+                nextStartTime = startTime + audioBuffer.duration;
+                
+                if (!isPlaying) {
+                    isPlaying = true;
+                    log('🔊 开始实时播放音频流', 'success', true);
+                }
+                
+            } catch (error) {
+                if (totalAudioChunks <= 5) {
+                    log(`音频块解码失败 (块${totalAudioChunks}): ${error.message}`, 'warning');
+                }
+            }
+        }
+        
+        function stopRealtimeAudio() {
+            if (audioContext) {
+                try {
+                    audioContext.close();
+                    audioContext = null;
+                    isPlaying = false;
+                    nextStartTime = 0;
+                    log('🔇 实时音频播放已停止', 'info');
+                } catch (error) {
+                    log(`停止实时播放失败: ${error.message}`, 'error');
+                }
+            }
+        }
+        
+        function playReceivedAudio() {
+            if (receivedAudioChunks.length === 0) {
+                log('没有接收到音频数据', 'warning');
+                return;
+            }
+            
+            try {
+                const audioDataArrays = receivedAudioChunks.map(base64Chunk => {
+                    const binaryString = atob(base64Chunk);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    return bytes;
+                });
+                
+                const totalLength = audioDataArrays.reduce((sum, arr) => sum + arr.length, 0);
+                const mergedArray = new Uint8Array(totalLength);
+                let offset = 0;
+                for (const arr of audioDataArrays) {
+                    mergedArray.set(arr, offset);
+                    offset += arr.length;
+                }
+                
+                const mp3Blob = new Blob([mergedArray], { type: 'audio/mpeg' });
+                const audioUrl = URL.createObjectURL(mp3Blob);
+                
+                const audioPlayer = document.getElementById('audioPlayer');
+                audioPlayer.src = audioUrl;
+                audioPlayer.style.display = 'block';
+                audioPlayer.play();
+                
+                document.getElementById('stopBtn').disabled = false;
+                log(`开始播放接收的MP3音频 (${mergedArray.length} bytes)`, 'success');
+                
+            } catch (error) {
+                log(`音频播放失败: ${error.message}`, 'error');
+            }
+        }
+        
+        function stopAudio() {
+            const audioPlayer = document.getElementById('audioPlayer');
+            audioPlayer.pause();
+            audioPlayer.currentTime = 0;
+            document.getElementById('stopBtn').disabled = true;
+            log('音频播放已停止', 'info');
+        }
+        
+        function downloadAudio() {
+            if (receivedAudioChunks.length === 0) {
+                log('没有音频数据可下载', 'warning');
+                return;
+            }
+            
+            try {
+                const audioDataArrays = receivedAudioChunks.map(base64Chunk => {
+                    const binaryString = atob(base64Chunk);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    return bytes;
+                });
+                
+                const totalLength = audioDataArrays.reduce((sum, arr) => sum + arr.length, 0);
+                const mergedArray = new Uint8Array(totalLength);
+                let offset = 0;
+                for (const arr of audioDataArrays) {
+                    mergedArray.set(arr, offset);
+                    offset += arr.length;
+                }
+                
+                const mp3Blob = new Blob([mergedArray], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(mp3Blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `vlm_tts_audio_${new Date().toISOString().slice(0,19)}.mp3`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                log(`MP3音频文件下载完成 (${mergedArray.length} bytes)`, 'success');
+                
+            } catch (error) {
+                log(`音频下载失败: ${error.message}`, 'error');
+            }
+        }
+        
+        // 页面加载时自动连接
+        window.addEventListener('load', function() {
+            log('页面加载完成，准备连接...', 'info');
+            connect();
+        });
+        
+        // 页面卸载时断开连接
+        window.addEventListener('beforeunload', function() {
+            if (socket && socket.connected) {
+                disconnect();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -9,6 +9,7 @@ from audio_converter import setup_ffmpeg
 from routes.chat_api import chat_bp
 from routes.health import health_bp
 from routes.audio_websocket import register_audio_handlers
+from routes.vlm_websocket import register_vlm_handlers
 
 # 设置日志
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +67,9 @@ app.register_blueprint(health_bp)
 
 # 注册音频WebSocket处理器
 register_audio_handlers(socketio)
+
+# 注册VLM WebSocket处理器
+register_vlm_handlers(socketio)
 
 # 检查配置
 from config import QWEN_API_KEY, QWEN_API_CHAT_URL, QWEN_CHAT_MODEL

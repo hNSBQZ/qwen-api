@@ -14,6 +14,9 @@ QWEN_API_CHAT_URL = os.getenv('QWEN_API_CHAT_URL', 'https://dashscope.aliyuncs.c
 # 千问聊天模型
 QWEN_CHAT_MODEL = os.getenv('QWEN_CHAT_MODEL', 'qwen3-32b')
 
+# 千问多模态模型
+QWEN_VLM_MODEL = os.getenv('QWEN_VLM_MODEL', 'qwen2.5-vl-32b-instruct')
+
 # 千问音频识别模型
 QWEN_AUDIO_RECOGNIZE_MODEL = os.getenv('QWEN_AUDIO_RECOGNIZE_MODEL', 'paraformer-v2')
 

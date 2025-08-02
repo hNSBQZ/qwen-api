@@ -101,6 +101,18 @@ def upload_audio_file(file_path):
     """
     return upload_file_to_oss(file_path, folder_prefix="audio")
 
+def upload_image_file(file_path):
+    """
+    专门用于上传图像文件的便捷函数
+    
+    Args:
+        file_path (str): 图像文件路径
+    
+    Returns:
+        dict: 上传结果信息
+    """
+    return upload_file_to_oss(file_path, folder_prefix="images")
+
 def delete_local_file(file_path):
     """
     删除本地文件
