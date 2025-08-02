@@ -282,8 +282,9 @@
             <div class="section">
                 <h3>🔊 音频播放</h3>
                 <div class="controls">
-                    <button id="playBtn" onclick="playReceivedAudio()" disabled>播放接收的音频</button>
+                    <button id="playBtn" onclick="playReceivedAudio()" disabled>播放完整音频</button>
                     <button id="stopBtn" onclick="stopAudio()" disabled>停止播放</button>
+                    <button id="stopRealtimeBtn" onclick="stopRealtimeAudio()">停止实时播放</button>
                     <button id="downloadBtn" onclick="downloadAudio()" disabled>下载音频</button>
                     <button id="debugBtn" onclick="showDebugInfo()" disabled>显示调试信息</button>
                 </div>
@@ -312,6 +313,10 @@
         let isRecording = false;
         let receivedAudioChunks = [];
         let totalAudioChunks = 0;
+        let audioContext = null;
+        let audioBufferQueue = [];
+        let isPlaying = false;
+        let nextStartTime = 0;
         let logUpdateTimer = null;
         let pendingLogs = [];
         let logSequence = 0;
@@ -345,9 +350,9 @@
                 clearTimeout(logUpdateTimer);
             }
             
-            // 确定刷新延迟：重要日志立即刷新，普通日志延迟刷新
+            // 确定刷新延迟：重要日志立即刷新，普通日志减少延迟
             const hasImmediate = pendingLogs.some(entry => entry.immediate);
-            const delay = hasImmediate ? 0 : 50;
+            const delay = hasImmediate ? 0 : 10;  // 减少延迟从50ms到10ms
             
             logUpdateTimer = setTimeout(() => {
                 if (pendingLogs.length > 0) {
@@ -442,7 +447,9 @@
             
             socket = io('http://localhost:5000/v1/chat/audio', {
                 transports: ['websocket'],
-                timeout: 20000
+                timeout: 60000,  // 增加超时时间到60秒
+                pingTimeout: 60000,
+                pingInterval: 25000
             });
             
             socket.on('connect', function() {
@@ -505,9 +512,16 @@
             socket.on('tts_started', function(data) {
                 log(`开始TTS合成: ${data.message}`, 'info', true);
                 
-                // 准备接收音频数据
+                // 准备接收音频数据和实时播放
                 receivedAudioChunks = [];
                 totalAudioChunks = 0;
+                audioBufferQueue = [];
+                isPlaying = false;
+                nextStartTime = 0;
+                
+                // 初始化AudioContext用于实时播放
+                initAudioContext();
+                
                 updateStats(null, null, 0);
                 document.getElementById('audioStatus').textContent = '正在接收音频数据...';
                 document.getElementById('audioStatus2').textContent = '合成中';
@@ -520,14 +534,13 @@
                     totalAudioChunks++;
                     updateStats(null, null, totalAudioChunks);
                     
-                    // 优化：减少频繁的base64解码和日志更新
-                    // 只有每10个音频块或特殊情况才显示详细日志
-                    if (totalAudioChunks % 10 === 0 || totalAudioChunks <= 3) {
+                    // 实时播放音频块
+                    playAudioChunkRealtime(data.data);
+                    
+                    // 优化日志显示：更频繁显示前几个块，然后每5个显示一次
+                    if (totalAudioChunks <= 5 || totalAudioChunks % 5 === 0) {
                         const chunkSize = atob(data.data).length;
-                        log(`接收音频块 ${totalAudioChunks} (大小: ${chunkSize} bytes)`, 'info', totalAudioChunks <= 3);
-                    } else {
-                        // 轻量级日志，不解码base64
-                        log(`接收音频块 ${totalAudioChunks}`, 'info');
+                        log(`🎵 接收音频块 ${totalAudioChunks} (${chunkSize} bytes)`, 'info', totalAudioChunks <= 3);
                     }
                     
                 } else if (data.event === 'finished') {
@@ -540,6 +553,11 @@
                     document.getElementById('audioStatus').textContent = `音频接收完成 (${receivedAudioChunks.length} 块)`;
                     document.getElementById('audioStatus2').textContent = '完成';
                     
+                    // 实时播放完成
+                    setTimeout(() => {
+                        log('🎵 实时音频播放完成', 'success', true);
+                    }, 1000);
+                    
                     // 启用播放按钮
                     document.getElementById('playBtn').disabled = false;
                     document.getElementById('downloadBtn').disabled = false;
@@ -548,10 +566,10 @@
                     // 延长自动断开时间，确保不会影响音频播放
                     setTimeout(() => {
                         if (socket && socket.connected) {
-                            log('音频接收完成，10秒后自动断开连接以释放资源', 'info', true);
+                            log('音频接收完成，15秒后自动断开连接以释放资源', 'info', true);
                             disconnect();
                         }
-                    }, 10000);
+                    }, 15000);
                 }
             });
             
@@ -572,6 +590,9 @@
                 socket = null;
                 updateConnectionStatus('error', '已断开连接');
                 log('手动断开WebSocket连接', 'info');
+                
+                // 停止实时音频播放
+                stopRealtimeAudio();
             }
         }
         
@@ -689,6 +710,76 @@
                 recordBtn.textContent = '开始录音';
                 recordBtn.style.background = '#667eea';
                 log('录音已停止', 'info');
+            }
+        }
+        
+        // 初始化AudioContext用于实时播放
+        function initAudioContext() {
+            if (!audioContext) {
+                try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    log('🎵 AudioContext初始化成功', 'success');
+                } catch (error) {
+                    log(`AudioContext初始化失败: ${error.message}`, 'error');
+                }
+            }
+        }
+        
+        // 实时播放音频块
+        async function playAudioChunkRealtime(base64Data) {
+            if (!audioContext) {
+                return;
+            }
+            
+            try {
+                // 解码base64 MP3数据
+                const binaryString = atob(base64Data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                // 解码MP3音频数据
+                const audioBuffer = await audioContext.decodeAudioData(bytes.buffer.slice());
+                
+                // 创建音频源并播放
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+                
+                // 计算播放时间以保持连续性
+                const currentTime = audioContext.currentTime;
+                const startTime = Math.max(currentTime, nextStartTime);
+                
+                source.start(startTime);
+                nextStartTime = startTime + audioBuffer.duration;
+                
+                if (!isPlaying) {
+                    isPlaying = true;
+                    log('🔊 开始实时播放音频流', 'success', true);
+                }
+                
+            } catch (error) {
+                // MP3解码可能失败，这很正常，因为可能是不完整的MP3块
+                // 只在前几次失败时记录，避免日志过多
+                if (totalAudioChunks <= 5) {
+                    log(`音频块解码失败 (块${totalAudioChunks}): ${error.message}`, 'warning');
+                }
+            }
+        }
+        
+        // 停止实时播放
+        function stopRealtimeAudio() {
+            if (audioContext) {
+                try {
+                    audioContext.close();
+                    audioContext = null;
+                    isPlaying = false;
+                    nextStartTime = 0;
+                    log('🔇 实时音频播放已停止', 'info');
+                } catch (error) {
+                    log(`停止实时播放失败: ${error.message}`, 'error');
+                }
             }
         }
         
@@ -819,10 +910,14 @@
             debugText += '\n';
             
             // MP3流式传输说明
-            debugText += '\n=== MP3流式传输 ===\n';
+            debugText += '\n=== MP3实时播放状态 ===\n';
+            debugText += `AudioContext状态: ${audioContext ? audioContext.state : '未初始化'}\n`;
+            debugText += `实时播放状态: ${isPlaying ? '播放中' : '已停止'}\n`;
+            debugText += `下次播放时间: ${nextStartTime.toFixed(3)}s\n`;
+            debugText += '\n=== MP3流式传输说明 ===\n';
             debugText += '服务器端PCM→MP3实时转换，500ms缓冲区\n';
-            debugText += '客户端接收MP3数据块，直接合并播放\n';
-            debugText += '音频块按接收顺序播放，无需额外排序\n';
+            debugText += '客户端接收MP3数据块，实时解码播放\n';
+            debugText += '使用AudioContext保证连续播放\n';
             
             debugDiv.textContent = debugText;
             debugDiv.classList.remove('hidden');

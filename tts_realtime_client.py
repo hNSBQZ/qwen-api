@@ -86,34 +86,68 @@ class TTSRealtimeClient:
 
     async def handle_messages(self) -> None:
         """处理来自服务器的消息"""
+        import asyncio
+        import time
+        
+        start_time = time.time()
+        max_duration = 60.0  # 最多处理60秒
+        last_message_time = start_time
+        message_timeout = 10.0  # 10秒无消息则超时
+        
         try:
-            async for message in self.ws:
-                event = json.loads(message)
-                event_type = event.get("type")
-                
-                if event_type == "error":
-                    logger.error(f"TTS API 错误: {event.get('error', {})}")
+            logger.info("开始处理TTS消息")
+            
+            while True:
+                try:
+                    # 设置消息接收超时
+                    message = await asyncio.wait_for(self.ws.recv(), timeout=2.0)
+                    last_message_time = time.time()
+                    
+                    event = json.loads(message)
+                    event_type = event.get("type")
+                    
+                    if event_type == "error":
+                        logger.error(f"TTS API 错误: {event.get('error', {})}")
+                        continue
+                    elif event_type == "session.created":
+                        logger.info(f"TTS 会话创建，ID: {event.get('session', {}).get('id')}")
+                    elif event_type == "session.updated":
+                        logger.info(f"TTS 会话更新，ID: {event.get('session', {}).get('id')}")
+                    elif event_type == "response.audio.delta" and self.audio_callback:
+                        audio_bytes = base64.b64decode(event.get("delta", ""))
+                        logger.info(f"收到PCM数据包，大小: {len(audio_bytes)} bytes")
+                        self._audio_chunks.append(audio_bytes)
+                        self.audio_callback(audio_bytes)
+                    elif event_type == "response.audio.done":
+                        logger.info("音频生成完成")
+                    elif event_type == "response.done":
+                        logger.info("响应完成")
+                    elif event_type == "session.finished":
+                        logger.info("会话已结束，退出消息处理")
+                        break
+                    
+                    # 检查总时长超时
+                    if time.time() - start_time > max_duration:
+                        logger.warning(f"TTS消息处理超时({max_duration}s)，强制退出")
+                        break
+                        
+                except asyncio.TimeoutError:
+                    # 检查是否长时间无消息
+                    if time.time() - last_message_time > message_timeout:
+                        logger.warning(f"TTS消息接收超时({message_timeout}s无消息)，退出处理")
+                        break
+                    # 继续等待
                     continue
-                elif event_type == "session.created":
-                    logger.info(f"TTS 会话创建，ID: {event.get('session', {}).get('id')}")
-                elif event_type == "session.updated":
-                    logger.info(f"TTS 会话更新，ID: {event.get('session', {}).get('id')}")
-                elif event_type == "response.audio.delta" and self.audio_callback:
-                    audio_bytes = base64.b64decode(event.get("delta", ""))
-                    self._audio_chunks.append(audio_bytes)
-                    self.audio_callback(audio_bytes)
-                elif event_type == "response.audio.done":
-                    logger.info("音频生成完成")
-                elif event_type == "response.done":
-                    logger.info("响应完成")
-                elif event_type == "session.finished":
-                    logger.info("会话已结束")
+                except asyncio.CancelledError:
+                    logger.info("TTS消息处理被取消")
                     break
 
         except websockets.exceptions.ConnectionClosed:
             logger.warning("TTS WebSocket 连接已关闭")
         except Exception as e:
             logger.error(f"处理TTS消息时出错: {str(e)}")
+        finally:
+            logger.info(f"TTS消息处理结束，总耗时: {time.time() - start_time:.2f}s")
 
     async def close(self) -> None:
         """关闭 WebSocket 连接"""
