@@ -37,7 +37,7 @@ def chat_completions():
         
         # 构造发送给Qwen API的请求数据
         qwen_data = {
-            'model': data.get('model', QWEN_CHAT_MODEL),
+            'model': QWEN_CHAT_MODEL,
             'messages': data['messages'],
             'enable_thinking': False  # 强制设置为false
         }
@@ -113,36 +113,32 @@ def handle_stream_response(qwen_url, headers, qwen_data, user_prompt):
             # 用于收集完整的响应内容
             complete_response = ""
             
-            # 逐行读取流式响应
+            # 逐行读取流式响应并原样转发
             for line in response.iter_lines(decode_unicode=True):
-                if line.strip():  # 跳过空行
-                    # 只处理以 data: 开头的行
-                    if line.startswith('data: '):
-                        json_part = line[6:].strip()
-                        if json_part == '[DONE]':
-                            continue
-                        try:
-                            chunk_data = json.loads(json_part)
-                            
-                            # 提取内容用于数据库记录
-                            if ('choices' in chunk_data and 
-                                len(chunk_data['choices']) > 0 and 
-                                'delta' in chunk_data['choices'][0] and 
-                                'content' in chunk_data['choices'][0]['delta']):
-                                content = chunk_data['choices'][0]['delta']['content']
-                                if content:
-                                    complete_response += content
-                            
-                            # 转发给客户端（保持原始格式）
-                            yield f"{json_part}\n"
-                            
-                        except json.JSONDecodeError:
-                            logger.warning(f"无法解析的JSON数据: {json_part}")
-                            # 如果不是JSON，仍然转发（可能是其他格式的数据）
-                            yield f"{json_part}\n"
-                    else:
-                        # 非data:行直接转发
-                        yield f"{line}\n"
+                if line:
+                    # 直接转发原始SSE行数据
+                    yield f"{line}\n"
+                    
+                    # 解析数据用于数据库记录
+                    line_str = line.decode('utf-8') if isinstance(line, bytes) else line
+                    if line_str.startswith('data: '):
+                        json_part = line_str[6:].strip()
+                        if json_part != '[DONE]':
+                            try:
+                                chunk_data = json.loads(json_part)
+                                # 提取内容用于数据库记录
+                                if ('choices' in chunk_data and 
+                                    len(chunk_data['choices']) > 0 and 
+                                    'delta' in chunk_data['choices'][0] and 
+                                    'content' in chunk_data['choices'][0]['delta']):
+                                    content = chunk_data['choices'][0]['delta']['content']
+                                    if content:
+                                        complete_response += content
+                            except json.JSONDecodeError:
+                                pass  # 忽略解析错误，不影响数据转发
+                else:
+                    # 转发空行
+                    yield "\n"
             
             # 流式完成后，记录到数据库
             if user_prompt and complete_response.strip():
@@ -163,7 +159,7 @@ def handle_stream_response(qwen_url, headers, qwen_data, user_prompt):
     # 返回流式响应
     return Response(
         generate(),
-        mimetype='text/plain',
+        mimetype='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',

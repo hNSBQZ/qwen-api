@@ -48,7 +48,7 @@ REGIN = os.getenv('REGIN', 'cn-beijing')
 
 # ========== 数据库配置 ==========
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', '192.168.0.164'),
+    'host': os.getenv('DB_HOST', '192.168.1.10'),
     'port': int(os.getenv('DB_PORT', 3306)),
     'user': os.getenv('DB_USER', 'hqz'),
     'password': os.getenv('DB_PASSWORD', ''),

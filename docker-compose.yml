@@ -2,37 +2,61 @@ version: '3.8'
 
 services:
   mysql:
-    image: mysql:8.0
+    image: mysql
     container_name: qwen-mysql
+    env_file:
+      - .env
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: qwen_db
-      MYSQL_USER: qwen_user
-      MYSQL_PASSWORD: qwen_password
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
     ports:
-      - "3306:3306"
+      - "3307:3306"  # 映射到3307端口
     networks:
       - qwen_network
+    restart: always
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
 
   qwen-app:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: qwen-app
     ports:
-      - "5000:5000"
+      - "6000:5000"  # 映射到6000端口
+    env_file:
+      - .env
     environment:
-      MYSQL_HOST: mysql
-      MYSQL_USER: qwen_user
-      MYSQL_PASSWORD: qwen_password
-      MYSQL_DB: qwen_db
+      # 数据库配置
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_USER: ${DB_USER}
+      DB_NAME: ${DB_NAME}
+      
+      # API密钥配置
+      QWEN_API_KEY: ${QWEN_API_KEY}
+      ACCESSKEY_ID: ${ACCESSKEY_ID}
+      ACCESSKEY_SECRET: ${ACCESSKEY_SECRET}
+      
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
     networks:
       - qwen_network
+    restart: always
+    volumes:
+      - ./tts_outputs:/app/tts_outputs
+      - ./audio_files:/app/audio_files
+      - ./vlm_files:/app/vlm_files
 
 volumes:
   mysql_data:
+    name: qwen_mysql_data
 
 networks:
   qwen_network:

@@ -78,5 +78,12 @@ logger.info(f"QWEN_API_CHAT_URL: {QWEN_API_CHAT_URL}")
 logger.info(f"QWEN_CHAT_MODEL: {QWEN_CHAT_MODEL}")
 
 if __name__ == '__main__':
-    # 使用SocketIO启动应用
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+    # 使用SocketIO启动应用，明确指定使用gevent以避免Werkzeug生产环境错误
+    try:
+        socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+    except RuntimeError as e:
+        if "Werkzeug web server is not designed to run in production" in str(e):
+            # 明确指定使用gevent以避免Werkzeug生产环境错误
+            socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
+        else:
+            raise
