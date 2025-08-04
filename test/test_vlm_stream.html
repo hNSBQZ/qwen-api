@@ -525,7 +525,7 @@
             updateConnectionStatus('connecting', '正在连接...');
             log('开始连接VLM WebSocket...');
             
-            socket = io('http://localhost:5000/v1/chat/vlm', {
+            socket = io('http://111.203.204.166:8765/v1/chat/vlm', {
                 transports: ['websocket'],
                 timeout: 60000,
                 pingTimeout: 60000,

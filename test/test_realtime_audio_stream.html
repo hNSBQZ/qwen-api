@@ -445,7 +445,7 @@
             updateConnectionStatus('connecting', '正在连接...');
             log('开始连接WebSocket...');
             
-            socket = io('http://111.203.204.166:6000/v1/chat/audio', {
+            socket = io('http://111.203.204.166:8765/v1/chat/audio', {
                 transports: ['websocket'],
                 timeout: 60000,  // 增加超时时间到60秒
                 pingTimeout: 60000,

@@ -2,6 +2,21 @@ from flask import Flask
 from flask_cors import CORS
 from flask_socketio import SocketIO
 import logging
+import os
+
+# Configure logging with timestamps
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Set up logging for third-party libraries
+logging.getLogger('werkzeug').setLevel(logging.WARNING)  # Flask server logs
+logging.getLogger('urllib3').setLevel(logging.WARNING)   # HTTP request logs
+logging.getLogger('requests').setLevel(logging.WARNING)  # requests library logs
+logging.getLogger('websockets').setLevel(logging.WARNING) # websocket logs
+logging.getLogger('dashscope').setLevel(logging.WARNING)  # Alibaba Cloud SDK logs
 
 from database import init_database
 from config import FFMPEG_PATH
@@ -12,7 +27,6 @@ from routes.audio_websocket import register_audio_handlers
 from routes.vlm_websocket import register_vlm_handlers
 
 # 设置日志
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 初始化FFmpeg
@@ -28,12 +42,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# 设置第三方库日志级别
-logging.getLogger('werkzeug').setLevel(logging.WARNING)  # Flask服务器日志
-logging.getLogger('urllib3').setLevel(logging.WARNING)   # HTTP请求日志
-logging.getLogger('requests').setLevel(logging.WARNING)  # requests库日志
-logging.getLogger('websockets').setLevel(logging.WARNING) # websocket日志
-logging.getLogger('dashscope').setLevel(logging.WARNING)  # 阿里云SDK日志
+# 这部分内容已移到日志配置的上方
 
 # 初始化SocketIO - 增加超时配置
 socketio = SocketIO(
